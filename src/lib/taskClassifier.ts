@@ -3,6 +3,16 @@
 
 export type TaskFamily = 'writing' | 'coding' | 'marketing' | 'design' | 'analysis';
 
+export type DeliverableType =
+  | 'email'
+  | 'document'
+  | 'plan'
+  | 'code'
+  | 'prompt'
+  | 'strategy'
+  | 'script'
+  | 'other';
+
 const TASK_PATTERNS: Record<TaskFamily, string[]> = {
   writing: [
     'write', 'draft', 'email', 'letter', 'message', 'article', 'blog', 'essay',
@@ -54,6 +64,53 @@ export function classifyTaskFamily(topic: string): TaskFamily {
   entries.sort((a, b) => b[1] - a[1]);
 
   return entries[0][1] > 0 ? entries[0][0] : 'writing';
+}
+
+/**
+ * Deliverable type patterns
+ */
+const DELIVERABLE_PATTERNS: Record<DeliverableType, string[]> = {
+  email: ['email', 'message', 'letter', 'reply', 'respond', 'mail'],
+  document: ['document', 'doc', 'report', 'memo', 'article', 'blog', 'essay', 'write'],
+  plan: ['plan', 'roadmap', 'timeline', 'schedule', 'outline', 'strategy'],
+  code: ['code', 'function', 'script', 'program', 'app', 'implement', 'build', 'debug', 'fix'],
+  prompt: ['prompt', 'instruction', 'template', 'guideline'],
+  strategy: ['strategy', 'campaign', 'approach', 'framework', 'methodology'],
+  script: ['script', 'automation', 'workflow', 'pipeline'],
+  other: [],
+};
+
+/**
+ * Guess the deliverable type from the topic
+ */
+export function guessDeliverable(topic: string): DeliverableType {
+  const normalized = topic.toLowerCase();
+
+  // Count matches for each deliverable type
+  const scores: Record<DeliverableType, number> = {
+    email: 0,
+    document: 0,
+    plan: 0,
+    code: 0,
+    prompt: 0,
+    strategy: 0,
+    script: 0,
+    other: 0,
+  };
+
+  for (const [deliverable, patterns] of Object.entries(DELIVERABLE_PATTERNS)) {
+    for (const pattern of patterns) {
+      if (normalized.includes(pattern)) {
+        scores[deliverable as DeliverableType]++;
+      }
+    }
+  }
+
+  // Return deliverable with highest score, default to 'other'
+  const entries = Object.entries(scores) as [DeliverableType, number][];
+  entries.sort((a, b) => b[1] - a[1]);
+
+  return entries[0][1] > 0 ? entries[0][0] : 'other';
 }
 
 /**

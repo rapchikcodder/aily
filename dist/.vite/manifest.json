@@ -9,9 +9,9 @@
     "file": "assets/client-BaXnLZmA.js",
     "name": "client"
   },
-  "_content.tsx-loader-BdLstktQ.js": {
-    "file": "assets/content.tsx-loader-BdLstktQ.js",
-    "src": "_content.tsx-loader-BdLstktQ.js"
+  "_content.tsx-loader-BL7Pdy64.js": {
+    "file": "assets/content.tsx-loader-BL7Pdy64.js",
+    "src": "_content.tsx-loader-BL7Pdy64.js"
   },
   "_index-DU7113MC.css": {
     "file": "assets/index-DU7113MC.css",
@@ -48,13 +48,13 @@
     ]
   },
   "src/background.ts": {
-    "file": "assets/background.ts-BC84cI8l.js",
+    "file": "assets/background.ts-vPzFbbBa.js",
     "name": "background.ts",
     "src": "src/background.ts",
     "isEntry": true
   },
   "src/content.tsx": {
-    "file": "assets/content.tsx-ClbzKDy1.js",
+    "file": "assets/content.tsx-B_WmhGCU.js",
     "name": "content.tsx",
     "src": "src/content.tsx",
     "isEntry": true,

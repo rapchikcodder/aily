@@ -3,8 +3,21 @@
 
 console.log('Prompt Architect background service worker initialized');
 
-// ─── Prompts (synchronized with aiEngine.ts) ───────────────────────────────
-const QUESTION_GENERATION_SYSTEM = `You are a Socratic prompt engineer. Your job is to ask high-impact clarification questions that improve the final output quality.
+// ═══════════════════════════════════════════════════════════════════════════
+// PROMPTS (synchronized with src/lib/prompts.ts)
+// Note: Background service workers use inline prompts for independence
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Stage 1: Question Generation System Prompt
+ * Features: role definition, intent lock, dimension taxonomy, self-check
+ */
+const QUESTION_GENERATION_SYSTEM = `You are a Socratic prompt engineer specialized in helping users articulate their needs precisely.
+
+<role>
+Your job is to ask high-impact clarification questions that maximize information gain and improve final output quality.
+You are NOT a solution provider. You are an interviewer who helps users clarify requirements.
+</role>
 
 <rules>
 - Generate EXACTLY 3 to 5 questions.
@@ -14,6 +27,7 @@ const QUESTION_GENERATION_SYSTEM = `You are a Socratic prompt engineer. Your job
 - Intent lock: Do NOT change the user's goal or task type. Do NOT propose solutions. Do NOT assume missing facts.
 - If the topic already clearly contains a dimension, do not ask that dimension again.
 - Be specific: never ask "tell me more" or vague questions.
+- Avoid redundancy: each question should maximize unique information gain.
 - Output MUST be valid JSON only (no markdown, no commentary).
 </rules>
 
@@ -35,6 +49,7 @@ Verify:
 - unique dimensions
 - radio/checkbox include options; scale/text omit options
 - questions are specific and aligned to the original goal
+- questions maximize information gain (not fluff)
 If any check fails, silently revise and output only the corrected JSON.
 </self_check_before_output>`;
 
@@ -45,7 +60,16 @@ The user wants to: "${topic}"
 
 Generate the questions now.`;
 
+/**
+ * Stage 2: Mega-Prompt Compilation System Prompt
+ * Features: reasoning scaffolding, decision summary, CO-STAR framework
+ */
 const MEGA_PROMPT_SYSTEM = `You are a master prompt engineer. Compile interview answers into a single structured CO-STAR mega-prompt that is ready to paste into Claude or ChatGPT.
+
+<role>
+You transform raw Q&A data into a clean, actionable mega-prompt that maximizes AI output quality.
+You prioritize signal over noise and ensure every word adds value.
+</role>
 
 <rules>
 - Convert the Interview Q&A into a compact "Decision Summary" (not a verbatim dump).
@@ -55,6 +79,15 @@ const MEGA_PROMPT_SYSTEM = `You are a master prompt engineer. Compile interview 
 - Keep the final mega-prompt ~250–400 words unless the user explicitly requested long form.
 - Output in clear markdown.
 </rules>
+
+<reasoning_scaffolding>
+Before generating the final output:
+1. Outline approach: What are the key decisions from the Q&A?
+2. Verify constraints: Are there must-include/must-avoid elements?
+3. Produce final output: Compile into CO-STAR format.
+
+Think through these steps internally, but only output the final mega-prompt.
+</reasoning_scaffolding>
 
 <format>
 ### CO-STAR Mega-Prompt: {title}

@@ -4,7 +4,17 @@
 import type { Question, Answer } from '../stores/useAppStore';
 import { getMatchingRules, compileInjections } from './variableInjector';
 import type { InjectionRule } from './variableInjector';
-import { classifyTaskFamily, getFewShotExample } from './taskClassifier';
+import { classifyTaskFamily, guessDeliverable, getFewShotExample } from './taskClassifier';
+import {
+  getQuestionGenerationSystemPrompt,
+  getQuestionGenerationUserPrompt,
+  getQuestionRepairPrompt,
+  getMegaPromptSystemPrompt,
+  getMegaPromptUserPrompt,
+  shouldRunCritic,
+  getCriticSystemPrompt,
+  getCriticUserPrompt,
+} from './prompts';
 
 // ---------- Types ----------
 export type AIProvider = 'local' | 'openai' | 'anthropic' | 'gemini';
@@ -16,112 +26,7 @@ export interface AIEngineConfig {
 }
 
 // ---------- Prompts ----------
-const QUESTION_GENERATION_SYSTEM = (fewShotExample: string) => `You are a Socratic prompt engineer. Your job is to ask high-impact clarification questions that improve the final output quality.
-
-<rules>
-- Generate EXACTLY 3 to 5 questions.
-- Each question must cover a UNIQUE dimension from:
-  deliverable, audience, inputs, constraints, style_tone
-- Prioritize "highest-impact uncertainty": ask what would most change the final output.
-- Intent lock: Do NOT change the user's goal or task type. Do NOT propose solutions. Do NOT assume missing facts.
-- If the topic already clearly contains a dimension, do not ask that dimension again.
-- Be specific: never ask "tell me more" or vague questions.
-- Output MUST be valid JSON only (no markdown, no commentary).
-</rules>
-
-<output_schema>
-Return a JSON array of objects with:
-{
-  "id": "q1" | "q2" | "q3" | "q4" | "q5",
-  "dimension": "deliverable" | "audience" | "inputs" | "constraints" | "style_tone",
-  "question": "string",
-  "type": "radio" | "checkbox" | "text" | "scale",
-  "options": ["..."] (required for radio/checkbox; omit otherwise),
-  "required": true | false
-}
-</output_schema>
-
-${fewShotExample}
-
-<self_check_before_output>
-Verify:
-- 3–5 items
-- unique dimensions
-- radio/checkbox include options; scale/text omit options
-- questions are specific and aligned to the original goal
-If any check fails, silently revise and output only the corrected JSON.
-</self_check_before_output>`;
-
-const QUESTION_GENERATION_USER = (topic: string) =>
-  `<topic>
-The user wants to: "${topic}"
-</topic>
-
-Generate the questions now.`;
-
-const MEGA_PROMPT_SYSTEM = `You are a master prompt engineer. Compile interview answers into a single structured CO-STAR mega-prompt that is ready to paste into Claude or ChatGPT.
-
-<rules>
-- Convert the Interview Q&A into a compact "Decision Summary" (not a verbatim dump).
-- Prioritize only decisions that materially affect the output.
-- If an answer is vague/low-signal, compress it to <= 10 words.
-- If answers conflict or essential info is missing, add 1–3 "Open Questions" at the end.
-- Keep the final mega-prompt ~250–400 words unless the user explicitly requested long form.
-- Output in clear markdown.
-</rules>
-
-<format>
-### CO-STAR Mega-Prompt: {title}
-
-**Context:**
-...
-
-**Objective:**
-...
-
-**Style:**
-...
-
-**Tone:**
-...
-
-**Audience:**
-...
-
-**Response Requirements:**
-- bullets...
-
-**Open Questions (if needed):**
-- ...
-</format>`;
-
-const MEGA_PROMPT_USER = (
-  topic: string,
-  answers: Answer[],
-  questions: Question[],
-  injectionBlocks: string
-) => {
-  const qaText = answers
-    .map((a) => {
-      const q = questions.find((q) => q.id === a.questionId);
-      return `Q: ${q?.question ?? a.questionId}\nA: ${Array.isArray(a.value) ? a.value.join(', ') : a.value}`;
-    })
-    .join('\n\n');
-
-  return `<original_goal>
-"${topic}"
-</original_goal>
-
-<decision_inputs>
-Interview Q&A:
-${qaText}
-
-Auto-injected context blocks:
-${injectionBlocks}
-</decision_inputs>
-
-Compile into CO-STAR mega-prompt now.`;
-};
+// All prompts now centralized in src/lib/prompts.ts
 
 // ---------- Local AI (Gemini Nano via window.ai) ----------
 async function generateWithLocalAI(systemPrompt: string, userPrompt: string): Promise<string> {
@@ -264,22 +169,30 @@ async function generate(
 /**
  * FR-001.2 + FR-001.3
  * Analyze the topic and generate 3-5 Socratic questions.
- * Now with dimension taxonomy, few-shot examples, and self-check validation.
+ * Now with:
+ * - Task family classification
+ * - Deliverable type detection
+ * - Few-shot examples
+ * - Dimension taxonomy
+ * - Self-check validation
+ * - Repair loop
  */
 export async function generateQuestions(
   topic: string,
   config: AIEngineConfig
 ): Promise<Question[]> {
-  // Step 1: Classify task family and get few-shot example
+  // Step 1: Classify task and deliverable
   const taskFamily = classifyTaskFamily(topic);
+  const deliverableType = guessDeliverable(topic);
   const fewShotExample = getFewShotExample(taskFamily);
 
-  // Step 2: Generate questions with task-specific example
-  let raw = await generate(
-    QUESTION_GENERATION_SYSTEM(fewShotExample),
-    QUESTION_GENERATION_USER(topic),
-    config
-  );
+  console.log(`[AI Engine] Task: ${taskFamily}, Deliverable: ${deliverableType}`);
+
+  // Step 2: Generate questions with world context
+  const systemPrompt = getQuestionGenerationSystemPrompt(fewShotExample, taskFamily, deliverableType);
+  const userPrompt = getQuestionGenerationUserPrompt(topic);
+
+  let raw = await generate(systemPrompt, userPrompt, config);
 
   // Strip markdown fences if the model wrapped the JSON anyway
   let cleaned = raw.replace(/```json?\n?/gi, '').replace(/```/g, '').trim();
@@ -297,12 +210,9 @@ export async function generateQuestions(
       const validationError = validateQuestions(parsed);
       if (validationError && retryCount < maxRetries) {
         // Retry with repair instruction
-        console.warn('Question validation failed, retrying...', validationError);
-        raw = await generate(
-          `${QUESTION_GENERATION_SYSTEM(fewShotExample)}\n\n<repair>Previous output had error: ${validationError}. Fix it and return valid JSON.</repair>`,
-          QUESTION_GENERATION_USER(topic),
-          config
-        );
+        console.warn('[AI Engine] Question validation failed, retrying...', validationError);
+        const repairPrompt = getQuestionRepairPrompt(systemPrompt, validationError);
+        raw = await generate(repairPrompt, userPrompt, config);
         cleaned = raw.replace(/```json?\n?/gi, '').replace(/```/g, '').trim();
         retryCount++;
         continue;
@@ -361,6 +271,10 @@ function validateQuestions(questions: any[]): string | null {
 /**
  * FR-003.1
  * Compile answers + injected variables into a CO-STAR mega-prompt.
+ * Now with:
+ * - Reasoning scaffolding
+ * - Decision Summary approach
+ * - Optional critic step for quality validation
  */
 export async function compileMegaPrompt(
   topic: string,
@@ -368,17 +282,40 @@ export async function compileMegaPrompt(
   answers: Answer[],
   config: AIEngineConfig
 ): Promise<string> {
-  // FR-002.1: Match answers against variable injection rules
+  // Step 1: Match answers against variable injection rules
   const matchedRules = getMatchingRules(answers, config.customVariables ?? []);
   const injectionBlocks = compileInjections(matchedRules);
 
-  const raw = await generate(
-    MEGA_PROMPT_SYSTEM,
-    MEGA_PROMPT_USER(topic, answers, questions, injectionBlocks),
-    config
-  );
+  // Step 2: Generate initial mega-prompt with reasoning scaffolding
+  const systemPrompt = getMegaPromptSystemPrompt();
+  const userPrompt = getMegaPromptUserPrompt(topic, answers, questions, injectionBlocks);
 
-  return raw.trim();
+  let megaPrompt = await generate(systemPrompt, userPrompt, config);
+  megaPrompt = megaPrompt.trim();
+
+  // Step 3: Check if critic review is needed
+  const { needsCritic, reason } = shouldRunCritic(answers, questions);
+
+  if (needsCritic && reason) {
+    console.log(`[AI Engine] Running critic step: ${reason}`);
+
+    try {
+      const criticSystemPrompt = getCriticSystemPrompt();
+      const criticUserPrompt = getCriticUserPrompt(megaPrompt, reason);
+
+      const improvedMegaPrompt = await generate(criticSystemPrompt, criticUserPrompt, config);
+      megaPrompt = improvedMegaPrompt.trim();
+
+      console.log('[AI Engine] Critic step completed successfully');
+    } catch (error) {
+      console.warn('[AI Engine] Critic step failed, using original mega-prompt', error);
+      // Fall back to original mega-prompt if critic fails
+    }
+  } else {
+    console.log('[AI Engine] Skipping critic step (not needed)');
+  }
+
+  return megaPrompt;
 }
 
 /**
