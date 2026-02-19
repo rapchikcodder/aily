@@ -1,10 +1,13 @@
 import { create } from 'zustand';
 
 // Types matching SRS Section 3.3.1
+export type QuestionDimension = 'deliverable' | 'audience' | 'inputs' | 'constraints' | 'style_tone';
+
 export interface Question {
   id: string;
   question: string;
   type: 'text' | 'radio' | 'checkbox' | 'scale';
+  dimension: QuestionDimension;
   options?: string[];
   required: boolean;
 }

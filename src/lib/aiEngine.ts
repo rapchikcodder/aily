@@ -4,6 +4,7 @@
 import type { Question, Answer } from '../stores/useAppStore';
 import { getMatchingRules, compileInjections } from './variableInjector';
 import type { InjectionRule } from './variableInjector';
+import { classifyTaskFamily, getFewShotExample } from './taskClassifier';
 
 // ---------- Types ----------
 export type AIProvider = 'local' | 'openai' | 'anthropic' | 'gemini';
@@ -15,45 +16,84 @@ export interface AIEngineConfig {
 }
 
 // ---------- Prompts ----------
-const QUESTION_GENERATION_SYSTEM = `You are a Socratic prompt engineer. Your job is to identify critical missing context from a user's vague idea, then craft specific, insightful questions to fill those gaps.
+const QUESTION_GENERATION_SYSTEM = (fewShotExample: string) => `You are a Socratic prompt engineer. Your job is to ask high-impact clarification questions that improve the final output quality.
 
-Rules:
-1. Generate exactly 3 to 5 questions — no more, no less
-2. Each question must target a DIFFERENT dimension of missing context
-3. Be specific, not generic (never ask "tell me more")
-4. Return ONLY valid JSON — no markdown fences, no explanation`;
+<rules>
+- Generate EXACTLY 3 to 5 questions.
+- Each question must cover a UNIQUE dimension from:
+  deliverable, audience, inputs, constraints, style_tone
+- Prioritize "highest-impact uncertainty": ask what would most change the final output.
+- Intent lock: Do NOT change the user's goal or task type. Do NOT propose solutions. Do NOT assume missing facts.
+- If the topic already clearly contains a dimension, do not ask that dimension again.
+- Be specific: never ask "tell me more" or vague questions.
+- Output MUST be valid JSON only (no markdown, no commentary).
+</rules>
+
+<output_schema>
+Return a JSON array of objects with:
+{
+  "id": "q1" | "q2" | "q3" | "q4" | "q5",
+  "dimension": "deliverable" | "audience" | "inputs" | "constraints" | "style_tone",
+  "question": "string",
+  "type": "radio" | "checkbox" | "text" | "scale",
+  "options": ["..."] (required for radio/checkbox; omit otherwise),
+  "required": true | false
+}
+</output_schema>
+
+${fewShotExample}
+
+<self_check_before_output>
+Verify:
+- 3–5 items
+- unique dimensions
+- radio/checkbox include options; scale/text omit options
+- questions are specific and aligned to the original goal
+If any check fails, silently revise and output only the corrected JSON.
+</self_check_before_output>`;
 
 const QUESTION_GENERATION_USER = (topic: string) =>
-  `The user wants to: "${topic}"
+  `<topic>
+The user wants to: "${topic}"
+</topic>
 
-Identify the most critical missing context. Return a JSON array:
-[
-  {
-    "id": "q1",
-    "question": "Specific question text?",
-    "type": "radio" | "checkbox" | "text" | "scale",
-    "options": ["Option A", "Option B"],  // required for radio/checkbox
-    "required": true | false
-  }
-]
+Generate the questions now.`;
 
-Question type guide:
-- radio: choose ONE from options (e.g., experience level)
-- checkbox: choose MULTIPLE (e.g., tech stack)
-- text: open-ended free text
-- scale: numeric 1-10 rating (omit options field)`;
+const MEGA_PROMPT_SYSTEM = `You are a master prompt engineer. Compile interview answers into a single structured CO-STAR mega-prompt that is ready to paste into Claude or ChatGPT.
 
-const MEGA_PROMPT_SYSTEM = `You are a master prompt engineer. You compile interview answers into a single, structured CO-STAR mega-prompt ready to paste into ChatGPT or Claude.
+<rules>
+- Convert the Interview Q&A into a compact "Decision Summary" (not a verbatim dump).
+- Prioritize only decisions that materially affect the output.
+- If an answer is vague/low-signal, compress it to <= 10 words.
+- If answers conflict or essential info is missing, add 1–3 "Open Questions" at the end.
+- Keep the final mega-prompt ~250–400 words unless the user explicitly requested long form.
+- Output in clear markdown.
+</rules>
 
-The CO-STAR framework:
-- Context: Background and relevant information
-- Objective: The precise goal
-- Style: Writing or output style
-- Tone: Communication tone
-- Audience: Who receives this output
-- Response: Exact format and structure expected
+<format>
+### CO-STAR Mega-Prompt: {title}
 
-Output the mega-prompt in clear markdown. Make it comprehensive but not bloated.`;
+**Context:**
+...
+
+**Objective:**
+...
+
+**Style:**
+...
+
+**Tone:**
+...
+
+**Audience:**
+...
+
+**Response Requirements:**
+- bullets...
+
+**Open Questions (if needed):**
+- ...
+</format>`;
 
 const MEGA_PROMPT_USER = (
   topic: string,
@@ -68,13 +108,19 @@ const MEGA_PROMPT_USER = (
     })
     .join('\n\n');
 
-  return `Original goal: "${topic}"
+  return `<original_goal>
+"${topic}"
+</original_goal>
 
+<decision_inputs>
 Interview Q&A:
 ${qaText}
-${injectionBlocks}
 
-Compile the above into a structured CO-STAR mega-prompt. The final output should be ready to paste directly into ChatGPT or Claude.`;
+Auto-injected context blocks:
+${injectionBlocks}
+</decision_inputs>
+
+Compile into CO-STAR mega-prompt now.`;
 };
 
 // ---------- Local AI (Gemini Nano via window.ai) ----------
@@ -218,35 +264,98 @@ async function generate(
 /**
  * FR-001.2 + FR-001.3
  * Analyze the topic and generate 3-5 Socratic questions.
+ * Now with dimension taxonomy, few-shot examples, and self-check validation.
  */
 export async function generateQuestions(
   topic: string,
   config: AIEngineConfig
 ): Promise<Question[]> {
-  const raw = await generate(
-    QUESTION_GENERATION_SYSTEM,
+  // Step 1: Classify task family and get few-shot example
+  const taskFamily = classifyTaskFamily(topic);
+  const fewShotExample = getFewShotExample(taskFamily);
+
+  // Step 2: Generate questions with task-specific example
+  let raw = await generate(
+    QUESTION_GENERATION_SYSTEM(fewShotExample),
     QUESTION_GENERATION_USER(topic),
     config
   );
 
   // Strip markdown fences if the model wrapped the JSON anyway
-  const cleaned = raw.replace(/```json?\n?/gi, '').replace(/```/g, '').trim();
+  let cleaned = raw.replace(/```json?\n?/gi, '').replace(/```/g, '').trim();
 
+  // Step 3: Try to parse and validate
   let parsed: any[];
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    throw new Error('AI returned malformed JSON for questions. Please try again.');
+  let retryCount = 0;
+  const maxRetries = 1;
+
+  while (retryCount <= maxRetries) {
+    try {
+      parsed = JSON.parse(cleaned);
+
+      // Validate schema
+      const validationError = validateQuestions(parsed);
+      if (validationError && retryCount < maxRetries) {
+        // Retry with repair instruction
+        console.warn('Question validation failed, retrying...', validationError);
+        raw = await generate(
+          `${QUESTION_GENERATION_SYSTEM(fewShotExample)}\n\n<repair>Previous output had error: ${validationError}. Fix it and return valid JSON.</repair>`,
+          QUESTION_GENERATION_USER(topic),
+          config
+        );
+        cleaned = raw.replace(/```json?\n?/gi, '').replace(/```/g, '').trim();
+        retryCount++;
+        continue;
+      } else if (validationError) {
+        throw new Error(validationError);
+      }
+
+      // Success!
+      break;
+    } catch (e: any) {
+      if (retryCount >= maxRetries) {
+        throw new Error('AI returned malformed JSON for questions. Please try again.');
+      }
+      retryCount++;
+    }
   }
 
-  // Validate and normalise
-  return parsed.map((q: any, i: number) => ({
+  // Normalize and return
+  return parsed!.map((q: any, i: number) => ({
     id: q.id ?? `q${i + 1}`,
     question: q.question,
+    dimension: q.dimension ?? 'constraints',
     type: q.type ?? 'text',
     options: q.options ?? [],
     required: q.required ?? true,
   }));
+}
+
+/**
+ * Validate question array structure and uniqueness constraints
+ */
+function validateQuestions(questions: any[]): string | null {
+  // Check count
+  if (!Array.isArray(questions)) return 'Output must be an array';
+  if (questions.length < 3 || questions.length > 5) {
+    return `Must have 3-5 questions, got ${questions.length}`;
+  }
+
+  // Check dimensions are unique
+  const dimensions = questions.map(q => q.dimension).filter(Boolean);
+  const uniqueDimensions = new Set(dimensions);
+  if (dimensions.length !== uniqueDimensions.size) {
+    return 'Dimensions must be unique (no duplicates)';
+  }
+
+  // Check radio/checkbox have options
+  for (const q of questions) {
+    if ((q.type === 'radio' || q.type === 'checkbox') && (!q.options || q.options.length === 0)) {
+      return `Question "${q.question}" is ${q.type} type but has no options`;
+    }
+  }
+
+  return null; // Valid
 }
 
 /**
