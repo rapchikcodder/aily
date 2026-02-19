@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm create:*)",
+      "Bash(npm init:*)",
+      "Bash(npm run type-check:*)",
+      "Bash(npm run build:*)",
+      "Bash(node -e:*)",
+      "WebFetch(domain:ai.google.dev)",
+      "Bash(git commit:*)"
+    ]
+  }
+}

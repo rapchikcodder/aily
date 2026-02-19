@@ -1,0 +1,16 @@
+<svg width="128" height="128" viewBox="0 0 128 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background Circle -->
+  <circle cx="64" cy="64" r="60" fill="#3B82F6"/>
+
+  <!-- Speech Bubble -->
+  <path d="M40 45C40 39.4772 44.4772 35 50 35H78C83.5228 35 88 39.4772 88 45V68C88 73.5228 83.5228 78 78 78H55L45 88V78H50C44.4772 78 40 73.5228 40 68V45Z" fill="white"/>
+
+  <!-- Building/Architecture Symbol (simplified layers) -->
+  <rect x="52" y="48" width="24" height="4" rx="1" fill="#3B82F6"/>
+  <rect x="52" y="56" width="24" height="4" rx="1" fill="#3B82F6"/>
+  <rect x="52" y="64" width="24" height="4" rx="1" fill="#3B82F6"/>
+
+  <!-- Question Mark Icon (small) -->
+  <circle cx="74" cy="48" r="8" fill="#F59E0B" opacity="0.9"/>
+  <text x="74" y="52" font-family="Arial, sans-serif" font-size="10" font-weight="bold" fill="white" text-anchor="middle">?</text>
+</svg>

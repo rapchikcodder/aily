@@ -1,0 +1,68 @@
+/* Shadow DOM CSS for Prompt Architect content script
+ * NO @tailwind base — preflight targets html/body which don't exist in Shadow DOM
+ * and can produce unexpected resets. We only need utilities + our custom overrides.
+ */
+@tailwind components;
+@tailwind utilities;
+
+/* ── Shadow DOM host reset ─────────────────────────────────────────────────
+ * Targeted reset instead of all:initial — preserves layout properties
+ * that JavaScript inline styles (position/z-index/width/height) set on the host.
+ * Note: inline styles always beat CSS rules, but all:initial can still
+ * cause display/font inheritance issues for children.
+ */
+:host {
+  box-sizing: border-box;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  color-scheme: light dark;
+}
+
+/* Propagate box-sizing to all shadow DOM descendants */
+*, *::before, *::after {
+  box-sizing: inherit;
+}
+
+/* ── Animations ────────────────────────────────────────────────────────────*/
+@keyframes pa-spin {
+  to { transform: rotate(360deg); }
+}
+@keyframes pa-slide-up {
+  from { transform: translateY(1rem); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+@keyframes pa-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.animate-spin           { animation: pa-spin 1s linear infinite; }
+.animate-in             { animation: pa-slide-up 0.2s ease-out, pa-fade-in 0.2s ease-out; }
+.slide-in-from-bottom-4 { animation: pa-slide-up 0.2s ease-out; }
+.slide-in-from-bottom-1 { animation: pa-slide-up 0.15s ease-out; }
+.fade-in                { animation: pa-fade-in 0.2s ease-out; }
+.duration-200           { animation-duration: 0.2s; }
+
+/* ── Scrollbar ─────────────────────────────────────────────────────────────*/
+::-webkit-scrollbar       { width: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: rgba(156,163,175,0.5); border-radius: 3px; }
+
+/* ── Range input ───────────────────────────────────────────────────────────*/
+input[type=range] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 6px;
+  border-radius: 3px;
+  background: #374151;
+  outline: none;
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #3b82f6;
+  cursor: pointer;
+}
