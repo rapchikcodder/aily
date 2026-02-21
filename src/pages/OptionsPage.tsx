@@ -4,7 +4,7 @@ import { cn } from '../lib/utils';
 import { toast, ToastContainer } from '../components/ui/Toast';
 
 function OptionsPage() {
-  const { apiKeys, setAPIKey, isLocalAIAvailable, localAIStatus, loadFromStorage, checkLocalAI } = useAppStore();
+  const { apiKeys, setAPIKey, isLocalAIAvailable, localAIStatus, loadFromStorage, checkLocalAI, v3Enabled, setV3Enabled } = useAppStore();
   const [openaiKey, setOpenaiKey] = useState('');
   const [anthropicKey, setAnthropicKey] = useState('');
   const [geminiKey, setGeminiKey] = useState('');
@@ -338,6 +338,72 @@ function OptionsPage() {
             <p className="text-xs text-gray-600 dark:text-gray-400 text-center">
               Keys are stored locally on your device. We never see or transmit them.
             </p>
+          </div>
+        </section>
+
+        {/* V3 Architecture Settings */}
+        <section className="space-y-4">
+          <div>
+            <h2 className="text-xl font-semibold text-gray-900 dark:text-gray-100 mb-1">
+              Interview Mode
+            </h2>
+            <p className="text-sm text-gray-600 dark:text-gray-300">
+              Choose between V2 (adaptive one-at-a-time) or V3 (tabbed, faster)
+            </p>
+          </div>
+
+          <div className="p-6 space-y-4 card-clean">
+            <label className="flex items-start gap-4 cursor-pointer group">
+              <input
+                type="checkbox"
+                checked={v3Enabled}
+                onChange={(e) => {
+                  setV3Enabled(e.target.checked);
+                  toast.success(e.target.checked ? 'V3 mode enabled!' : 'V2 mode enabled!');
+                }}
+                className="w-5 h-5 mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-offset-2 cursor-pointer"
+              />
+              <div className="flex-1">
+                <div className="font-semibold text-gray-900 dark:text-gray-100 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">
+                  Use V3 Architecture (Recommended)
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
+                  2 API calls, tabbed UI, gpt-4o-mini + claude-3.5-sonnet
+                </p>
+                <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                  <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded px-2 py-1 text-green-700 dark:text-green-300">
+                    ✓ ~70% cost reduction
+                  </div>
+                  <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded px-2 py-1 text-green-700 dark:text-green-300">
+                    ✓ ~50% faster
+                  </div>
+                  <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded px-2 py-1 text-green-700 dark:text-green-300">
+                    ✓ Zero repair loops
+                  </div>
+                </div>
+              </div>
+            </label>
+
+            {v3Enabled && (
+              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
+                <p className="text-sm text-blue-800 dark:text-blue-200">
+                  <strong>ⓘ V3 Requirements:</strong> Requires both OpenAI and Anthropic API keys
+                  {(!apiKeys.openai || !apiKeys.anthropic) && (
+                    <span className="block mt-1 text-amber-700 dark:text-amber-300">
+                      ⚠️ {!apiKeys.openai && 'OpenAI key missing'}{!apiKeys.openai && !apiKeys.anthropic && ' and '}{!apiKeys.anthropic && 'Anthropic key missing'}
+                    </span>
+                  )}
+                </p>
+              </div>
+            )}
+
+            {!v3Enabled && (
+              <div className="bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700 rounded-lg p-4">
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  <strong>V2 Mode:</strong> Uses adaptive one-at-a-time questioning (4-6 API calls)
+                </p>
+              </div>
+            )}
           </div>
         </section>
 

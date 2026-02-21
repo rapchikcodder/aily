@@ -5,54 +5,51 @@
     "src": "../../../../../@crx/manifest",
     "isEntry": true
   },
-  "_Toast-DdaPQo5K.js": {
-    "file": "assets/Toast-DdaPQo5K.js",
+  "_Toast-DJ08JjkF.js": {
+    "file": "assets/Toast-DJ08JjkF.js",
     "name": "Toast",
     "imports": [
-      "_utils-P31o8Rby.js"
+      "_useAppStore-CdEbkMje.js"
     ]
   },
-  "_content.tsx-loader--cX1fQZN.js": {
-    "file": "assets/content.tsx-loader--cX1fQZN.js",
-    "src": "_content.tsx-loader--cX1fQZN.js"
+  "_content.tsx-loader-esZd7cMv.js": {
+    "file": "assets/content.tsx-loader-esZd7cMv.js",
+    "src": "_content.tsx-loader-esZd7cMv.js"
   },
-  "_index-Dd_PI8OH.js": {
-    "file": "assets/index-Dd_PI8OH.js",
+  "_index-BBIvZX-j.css": {
+    "file": "assets/index-BBIvZX-j.css",
+    "src": "_index-BBIvZX-j.css"
+  },
+  "_index-bpJhN0aj.js": {
+    "file": "assets/index-bpJhN0aj.js",
     "name": "index",
-    "imports": [
-      "_utils-P31o8Rby.js"
-    ],
     "css": [
-      "assets/index-ODQSSrLs.css"
+      "assets/index-BBIvZX-j.css"
     ]
   },
-  "_index-ODQSSrLs.css": {
-    "file": "assets/index-ODQSSrLs.css",
-    "src": "_index-ODQSSrLs.css"
-  },
-  "_utils-P31o8Rby.js": {
-    "file": "assets/utils-P31o8Rby.js",
-    "name": "utils"
+  "_useAppStore-CdEbkMje.js": {
+    "file": "assets/useAppStore-CdEbkMje.js",
+    "name": "useAppStore"
   },
   "index.html": {
-    "file": "assets/index.html-DhpmMmqe.js",
+    "file": "assets/index.html-CfJJCMSz.js",
     "name": "index.html",
     "src": "index.html",
     "isEntry": true,
     "imports": [
-      "_index-Dd_PI8OH.js",
-      "_utils-P31o8Rby.js"
+      "_index-bpJhN0aj.js",
+      "_useAppStore-CdEbkMje.js"
     ]
   },
   "options.html": {
-    "file": "assets/options.html-D2nf6SDw.js",
+    "file": "assets/options.html-XzJP79yR.js",
     "name": "options.html",
     "src": "options.html",
     "isEntry": true,
     "imports": [
-      "_index-Dd_PI8OH.js",
-      "_utils-P31o8Rby.js",
-      "_Toast-DdaPQo5K.js"
+      "_index-bpJhN0aj.js",
+      "_useAppStore-CdEbkMje.js",
+      "_Toast-DJ08JjkF.js"
     ]
   },
   "src/background.ts": {
@@ -62,13 +59,13 @@
     "isEntry": true
   },
   "src/content.tsx": {
-    "file": "assets/content.tsx-DzmNGUjr.js",
+    "file": "assets/content.tsx-3cloo_5s.js",
     "name": "content.tsx",
     "src": "src/content.tsx",
     "isEntry": true,
     "imports": [
-      "_utils-P31o8Rby.js",
-      "_Toast-DdaPQo5K.js"
+      "_useAppStore-CdEbkMje.js",
+      "_Toast-DJ08JjkF.js"
     ]
   }
 }

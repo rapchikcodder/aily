@@ -1,15 +1,24 @@
 // FR-001.4, FR-005.3-5.5: Main overlay orchestrator
 // Manages the full interview lifecycle: Loading → Questions → Result
+// V3: Uses 2-stage flow (generateContextQuestions → compileMegaPromptV3)
 
 import { useState, useEffect, useCallback } from 'react';
 import { cn } from '../lib/utils';
 import { QuestionCard } from './QuestionCard';
+import { TabsQuestionCard } from './TabsQuestionCard'; // V3
 import { ResultScreen } from './ResultScreen';
 import { QuestionSkeleton } from './ui/SkeletonLoader';
 import { PageTransition } from './ui/PageTransition';
-import { checkLocalAICapability, generateNextQuestion, compileMegaPrompt } from '../lib/aiEngine';
+import {
+  checkLocalAICapability,
+  generateNextQuestion,
+  compileMegaPrompt,
+  generateContextQuestions, // V3
+  compileMegaPromptV3, // V3
+} from '../lib/aiEngine';
 import type { AIProvider } from '../lib/aiEngine';
 import type { Question, Answer } from '../stores/useAppStore';
+import { useAppStore } from '../stores/useAppStore'; // V3: Get v3Enabled flag
 
 export type OverlayStage = 'loading' | 'interview' | 'compiling' | 'result' | 'error';
 
@@ -59,11 +68,14 @@ export function InterviewOverlay({
   const [errorMsg, setErrorMsg] = useState('');
   // Incrementing this forces the init useEffect to re-run (used by Retry button)
   const [runKey, setRunKey] = useState(0);
-  // Adaptive questioning state
+  // Adaptive questioning state (V2 only)
   const [isGeneratingNext, setIsGeneratingNext] = useState(false);
   const [generateError, setGenerateError] = useState('');
   const [retryCount, setRetryCount] = useState(0);
   const [canContinueWithPartial, setCanContinueWithPartial] = useState(false);
+
+  // V3 mode: 2-API-call architecture (configurable via settings)
+  const v3Enabled = useAppStore((state) => state.v3Enabled);
 
   // Generate first question on mount — also re-runs when runKey changes (Retry)
   useEffect(() => {
@@ -72,56 +84,83 @@ export function InterviewOverlay({
     async function init() {
       try {
         const config = await loadAIConfig();
-        // Auto-downgrade to gemini/grok/openai/anthropic if local AI unavailable
-        if (config.provider === 'local') {
-          const localOK = await checkLocalAICapability();
-          if (!localOK) {
-            // Check if cloud keys exist (prioritize free Gemini)
-            const storageResult = (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local)
-              ? await chrome.storage.local.get(['apiKeys'])
-              : { apiKeys: {} };
-            const keys = (storageResult.apiKeys ?? {}) as Record<string, string>;
-            if (keys['gemini']) { config.provider = 'gemini'; config.apiKey = keys['gemini']; }
-            else if (keys['grok']) { config.provider = 'grok'; config.apiKey = keys['grok']; }
-            else if (keys['openai']) { config.provider = 'openai'; config.apiKey = keys['openai']; }
-            else if (keys['anthropic']) { config.provider = 'anthropic'; config.apiKey = keys['anthropic']; }
-            else {
-              setErrorMsg('No AI provider available. Please add an API key in Settings.');
-              setStage('error');
-              return;
+
+        if (v3Enabled) {
+          // ═══ V3 FLOW: Generate all 3-4 questions at once ═══
+          console.log('[V3] Starting interview for:', topic);
+
+          // V3 Stage 1: Generate context questions (API call #1)
+          const result = await generateContextQuestions(topic, config);
+
+          if (cancelled) return;
+
+          setQuestions(result.questions);
+          setStage('interview'); // Show tabbed UI
+          console.log('[V3] Generated', result.questions.length, 'questions');
+        } else {
+          // ═══ V2 FLOW: Adaptive one-at-a-time (backward compatibility) ═══
+          // Auto-downgrade to gemini/grok/openai/anthropic if local AI unavailable
+          if (config.provider === 'local') {
+            const localOK = await checkLocalAICapability();
+            if (!localOK) {
+              // Check if cloud keys exist (prioritize free Gemini)
+              const storageResult =
+                typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local
+                  ? await chrome.storage.local.get(['apiKeys'])
+                  : { apiKeys: {} };
+              const keys = (storageResult.apiKeys ?? {}) as Record<string, string>;
+              if (keys['gemini']) {
+                config.provider = 'gemini';
+                config.apiKey = keys['gemini'];
+              } else if (keys['grok']) {
+                config.provider = 'grok';
+                config.apiKey = keys['grok'];
+              } else if (keys['openai']) {
+                config.provider = 'openai';
+                config.apiKey = keys['openai'];
+              } else if (keys['anthropic']) {
+                config.provider = 'anthropic';
+                config.apiKey = keys['anthropic'];
+              } else {
+                setErrorMsg('No AI provider available. Please add an API key in Settings.');
+                setStage('error');
+                return;
+              }
             }
           }
-        }
 
-        // Generate first question adaptively
-        const result = await generateNextQuestion(topic, [], [], config, 3, 5);
+          // Generate first question adaptively
+          const result = await generateNextQuestion(topic, [], [], config, 3, 5);
 
-        if (cancelled) return;
-
-        if (result.done) {
-          // Unlikely but possible - topic is so clear no questions needed
-          setStage('compiling');
-          // Compile with zero questions
-          const megaPromptText = await compileMegaPrompt(topic, [], [], config);
           if (cancelled) return;
-          setMegaPrompt(megaPromptText);
-          setStage('result');
-        } else {
-          setQuestions([result.question!]);
-          setCurrentIndex(0);
-          setStage('interview');
+
+          if (result.done) {
+            // Unlikely but possible - topic is so clear no questions needed
+            setStage('compiling');
+            // Compile with zero questions
+            const megaPromptText = await compileMegaPrompt(topic, [], [], config);
+            if (cancelled) return;
+            setMegaPrompt(megaPromptText);
+            setStage('result');
+          } else {
+            setQuestions([result.question!]);
+            setCurrentIndex(0);
+            setStage('interview');
+          }
         }
       } catch (e: any) {
         if (!cancelled) {
-          setErrorMsg(e.message ?? 'Failed to generate first question. Please try again.');
+          setErrorMsg(e.message ?? 'Failed to generate questions. Please try again.');
           setStage('error');
         }
       }
     }
 
     init();
-    return () => { cancelled = true; };
-  }, [topic, runKey]);
+    return () => {
+      cancelled = true;
+    };
+  }, [topic, runKey, v3Enabled]);
 
   // Keyboard: Esc to close
   useEffect(() => {
@@ -143,6 +182,26 @@ export function InterviewOverlay({
       return [...prev, answer];
     });
   }, []);
+
+  // V3: Submit all answers and compile mega-prompt (API call #2)
+  const handleSubmitAnswersV3 = useCallback(async () => {
+    console.log('[V3] Submitting answers, compiling mega-prompt...');
+    setStage('compiling');
+
+    try {
+      const config = await loadAIConfig();
+
+      // V3 Stage 2: Compile mega-prompt (API call #2)
+      const megaPromptText = await compileMegaPromptV3(topic, questions, answers, config);
+
+      setMegaPrompt(megaPromptText);
+      setStage('result');
+      console.log('[V3] Mega-prompt compiled successfully');
+    } catch (e: any) {
+      setErrorMsg(e.message ?? 'Failed to compile mega-prompt. Please try again.');
+      setStage('error');
+    }
+  }, [topic, questions, answers]);
 
   const handleNext = useCallback(async () => {
     if (currentIndex < questions.length - 1) {
@@ -248,22 +307,36 @@ export function InterviewOverlay({
             </PageTransition>
           )}
 
-          {/* ── Interview with Page Transitions ── */}
-          {stage === 'interview' && questions[currentIndex] && (
+          {/* ── Interview ── */}
+          {stage === 'interview' && (
             <>
-              <PageTransition key={currentIndex} direction="right">
-                <QuestionCard
-                  question={questions[currentIndex]}
-                  currentIndex={currentIndex}
-                  total={questions.length}
-                  existingAnswer={answers.find((a) => a.questionId === questions[currentIndex].id)}
-                  onAnswer={handleAnswer}
-                  onNext={handleNext}
-                  onBack={handleBack}
-                  onSkip={handleSkip}
+              {v3Enabled ? (
+                // V3: Tabbed UI (all questions at once)
+                <TabsQuestionCard
+                  questions={questions}
+                  answers={answers}
+                  onAnswersChange={setAnswers}
+                  onSubmit={handleSubmitAnswersV3}
                   isDark={isDark}
                 />
-              </PageTransition>
+              ) : (
+                // V2: One-at-a-time with page transitions
+                questions[currentIndex] && (
+                  <PageTransition key={currentIndex} direction="right">
+                    <QuestionCard
+                      question={questions[currentIndex]}
+                      currentIndex={currentIndex}
+                      total={questions.length}
+                      existingAnswer={answers.find((a) => a.questionId === questions[currentIndex].id)}
+                      onAnswer={handleAnswer}
+                      onNext={handleNext}
+                      onBack={handleBack}
+                      onSkip={handleSkip}
+                      isDark={isDark}
+                    />
+                  </PageTransition>
+                )
+              )}
 
               {/* Loading Next Question */}
               {isGeneratingNext && (

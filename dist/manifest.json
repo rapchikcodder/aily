@@ -35,7 +35,7 @@
   "content_scripts": [
     {
       "js": [
-        "assets/content.tsx-loader--cX1fQZN.js"
+        "assets/content.tsx-loader-esZd7cMv.js"
       ],
       "matches": [
         "https://chatgpt.com/*",
@@ -58,9 +58,9 @@
         "https://claude.ai/*"
       ],
       "resources": [
-        "assets/utils-P31o8Rby.js",
-        "assets/Toast-DdaPQo5K.js",
-        "assets/content.tsx-DzmNGUjr.js"
+        "assets/useAppStore-CdEbkMje.js",
+        "assets/Toast-DJ08JjkF.js",
+        "assets/content.tsx-3cloo_5s.js"
       ],
       "use_dynamic_url": false
     }

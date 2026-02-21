@@ -491,3 +491,155 @@ Based on the Q&A history and remaining dimensions, either:
 Focus on the critical missing dimensions first, then fill in nice-to-have information.
 </task>`;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// V3: 2-API-CALL ARCHITECTURE (gpt-4o-mini + claude-3.5-sonnet)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * V3 Stage 1 System Prompt: Universal Context Extractor
+ * Uses gpt-4o-mini with OpenAI Structured Outputs
+ * Generates exactly 3-4 questions, all at once (no adaptive logic)
+ */
+export function getV3Stage1SystemPrompt(): string {
+  return `You are an expert Prompt Architect.
+
+<role>Analyze the user's vague topic, determine its core domain (coding, lifestyle, creative, business, etc.), and identify the 3 to 4 absolute most critical missing context variables.</role>
+
+<rules>
+1. Generate EXACTLY 3 or 4 questions.
+2. Questions must target "Highest Information Gain"
+3. DO NOT ask what they want to make (they already told you). Ask HOW, FOR WHOM, or UNDER WHAT CONSTRAINTS.
+4. Keep questions extremely concise and punchy.
+5. Provide 3-5 specific multiple-choice options for each question (UI will add 'Custom' text box)
+</rules>
+
+<output_schema>
+{
+  "genre": "string (e.g., 'Creative Writing', 'Software Dev')",
+  "questions": [
+    {
+      "id": "q1",
+      "focus": "string (e.g., 'Target Audience', 'Tech Stack')",
+      "question": "string",
+      "options": ["option 1", "option 2", "option 3", "option 4"]
+    }
+  ]
+}
+</output_schema>`;
+}
+
+/**
+ * V3 Stage 1 User Prompt
+ */
+export function getV3Stage1UserPrompt(topic: string): string {
+  return `<topic>
+"${topic}"
+</topic>
+
+Generate the context questions now.`;
+}
+
+/**
+ * V3 Stage 1 JSON Schema for OpenAI Structured Outputs
+ * Guarantees valid JSON response (no repair loops needed)
+ */
+export function getV3Stage1JsonSchema(): object {
+  return {
+    type: 'object',
+    required: ['genre', 'questions'],
+    properties: {
+      genre: {
+        type: 'string',
+        description: 'The detected domain/genre (e.g., Creative Writing, Software Dev)',
+      },
+      questions: {
+        type: 'array',
+        minItems: 3,
+        maxItems: 4,
+        items: {
+          type: 'object',
+          required: ['id', 'focus', 'question', 'options'],
+          properties: {
+            id: {
+              type: 'string',
+              description: 'Question ID (q1, q2, q3, q4)',
+            },
+            focus: {
+              type: 'string',
+              description: 'What this question is targeting (e.g., Target Audience, Tech Stack)',
+            },
+            question: {
+              type: 'string',
+              description: 'The actual question text',
+            },
+            options: {
+              type: 'array',
+              minItems: 3,
+              maxItems: 5,
+              items: {
+                type: 'string',
+              },
+              description: 'Multiple choice options (3-5 items)',
+            },
+          },
+          additionalProperties: false,
+        },
+      },
+    },
+    additionalProperties: false,
+  };
+}
+
+/**
+ * V3 Stage 2 System Prompt: Dynamic Mega-Prompt Compiler
+ * Uses claude-3.5-sonnet with max_tokens: 2000
+ * Compiles Q&A into CO-STAR mega-prompt
+ */
+export function getV3Stage2SystemPrompt(): string {
+  return `You are a master Prompt Engineer. Your task is to compile a user's original vague idea and their clarifying answers into a professional, highly optimized Mega-Prompt.
+
+<role>Transform raw Q&A data into a dense, actionable prompt that leaves zero ambiguity for the final AI.</role>
+
+<rules>
+1. Use CO-STAR framework
+2. DO NOT write fluff. Be specific, concrete, and directive.
+3. Scale the length to match task complexity
+4. Output ONLY the compiled Mega-Prompt in markdown
+</rules>
+
+<format>
+### Context
+### Objective
+### Style & Tone
+### Audience
+### Response Requirements
+</format>`;
+}
+
+/**
+ * V3 Stage 2 User Prompt
+ */
+export function getV3Stage2UserPrompt(
+  topic: string,
+  answers: Answer[],
+  questions: Question[]
+): string {
+  const qaText = answers
+    .map((a) => {
+      const q = questions.find((q) => q.id === a.questionId);
+      const answerValue = Array.isArray(a.value) ? a.value.join(', ') : String(a.value);
+      return `Q: ${q?.question ?? a.questionId}\nA: ${answerValue}`;
+    })
+    .join('\n\n');
+
+  return `<original_idea>
+"${topic}"
+</original_idea>
+
+<clarifying_qa>
+${qaText}
+</clarifying_qa>
+
+Compile the Mega-Prompt now.`;
+}

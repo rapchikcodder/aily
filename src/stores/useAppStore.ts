@@ -59,6 +59,7 @@ interface AppState {
     grok?: string;
   };
   customVariables: Variable[];
+  v3Enabled: boolean; // V3: 2-API-call architecture toggle
 
   // History
   promptHistory: GeneratedPrompt[];
@@ -77,6 +78,7 @@ interface AppState {
   setAPIKey: (provider: 'openai' | 'anthropic' | 'gemini' | 'grok', key: string) => void;
   addCustomVariable: (variable: Variable) => void;
   removeCustomVariable: (trigger: string) => void;
+  setV3Enabled: (enabled: boolean) => void; // V3 toggle
 
   saveToHistory: (prompt: GeneratedPrompt) => void;
   clearHistory: () => void;
@@ -99,6 +101,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   apiKeys: {},
   customVariables: [],
+  v3Enabled: true, // V3 enabled by default
 
   promptHistory: [],
 
@@ -188,6 +191,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     get().saveToStorage();
   },
 
+  setV3Enabled: (enabled) => {
+    set({ v3Enabled: enabled });
+    get().saveToStorage();
+  },
+
   saveToHistory: (prompt) => {
     const { promptHistory } = get();
     const newHistory = [prompt, ...promptHistory].slice(0, 100); // Keep last 100
@@ -207,7 +215,8 @@ export const useAppStore = create<AppState>((set, get) => ({
           'apiKeys',
           'customVariables',
           'promptHistory',
-          'aiProvider'
+          'aiProvider',
+          'v3Enabled'
         ]);
 
         const stored = result as {
@@ -215,12 +224,14 @@ export const useAppStore = create<AppState>((set, get) => ({
           customVariables?: Variable[];
           promptHistory?: GeneratedPrompt[];
           aiProvider?: AIProvider;
+          v3Enabled?: boolean;
         };
         set({
           apiKeys: stored.apiKeys || {},
           customVariables: stored.customVariables || [],
           promptHistory: stored.promptHistory || [],
           aiProvider: stored.aiProvider || 'local',
+          v3Enabled: stored.v3Enabled !== undefined ? stored.v3Enabled : true,
         });
       } catch (error) {
         console.error('Error loading from storage:', error);
@@ -231,12 +242,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveToStorage: async () => {
     if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       try {
-        const { apiKeys, customVariables, promptHistory, aiProvider } = get();
+        const { apiKeys, customVariables, promptHistory, aiProvider, v3Enabled } = get();
         await chrome.storage.local.set({
           apiKeys,
           customVariables,
           promptHistory,
           aiProvider,
+          v3Enabled,
         });
       } catch (error) {
         console.error('Error saving to storage:', error);

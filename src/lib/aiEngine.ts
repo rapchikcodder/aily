@@ -16,6 +16,12 @@ import {
   getCriticUserPrompt,
   buildNextQuestionSystemPrompt,
   buildNextQuestionUserPrompt,
+  // V3 prompts
+  getV3Stage1SystemPrompt,
+  getV3Stage1UserPrompt,
+  getV3Stage1JsonSchema,
+  getV3Stage2SystemPrompt,
+  getV3Stage2UserPrompt,
 } from './prompts';
 import { extractFirstJsonObject, safeJsonParse, validateNextQuestionResponse } from './validators';
 import { inferIntent } from './intent';
@@ -609,4 +615,192 @@ export async function checkLocalAICapability(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// V3: 2-API-CALL ARCHITECTURE (gpt-4o-mini + claude-3.5-sonnet)
+// ════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Helper: Get OpenAI API key with fallback
+ * Priority: config.apiKey → chrome.storage → throw error
+ */
+async function getOpenAIKey(config: AIEngineConfig): Promise<string> {
+  if (config.provider === 'openai' && config.apiKey) {
+    return config.apiKey;
+  }
+
+  if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
+    throw new Error('Chrome storage not available');
+  }
+
+  const result = await chrome.storage.local.get(['apiKeys']);
+  const keys = (result.apiKeys ?? {}) as Record<string, string>;
+
+  if (keys.openai) return keys.openai;
+
+  throw new Error('OpenAI API key not found. Please add it in Settings.');
+}
+
+/**
+ * Helper: Get Anthropic API key with fallback
+ * Priority: config.apiKey → chrome.storage → throw error
+ */
+async function getAnthropicKey(config: AIEngineConfig): Promise<string> {
+  if (config.provider === 'anthropic' && config.apiKey) {
+    return config.apiKey;
+  }
+
+  if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
+    throw new Error('Chrome storage not available');
+  }
+
+  const result = await chrome.storage.local.get(['apiKeys']);
+  const keys = (result.apiKeys ?? {}) as Record<string, string>;
+
+  if (keys.anthropic) return keys.anthropic;
+
+  throw new Error('Anthropic API key not found. Please add it in Settings.');
+}
+
+/**
+ * V3 Stage 1: Universal Context Extractor
+ * Uses gpt-4o-mini with OpenAI Structured Outputs (no repair loops)
+ * Returns exactly 3-4 questions, all at once
+ */
+export async function generateContextQuestions(
+  topic: string,
+  config: AIEngineConfig
+): Promise<{
+  genre: string;
+  questions: Question[];
+}> {
+  console.log('[V3 Stage 1] Generating context questions...');
+
+  // 1. Get OpenAI API key
+  const apiKey = await getOpenAIKey(config);
+
+  // 2. Build prompts
+  const systemPrompt = getV3Stage1SystemPrompt();
+  const userPrompt = getV3Stage1UserPrompt(topic);
+  const schema = getV3Stage1JsonSchema();
+
+  // 3. Call OpenAI with Structured Outputs
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o-mini',
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+      response_format: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'context_questions',
+          strict: true,
+          schema: schema,
+        },
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(`OpenAI error: ${err?.error?.message ?? response.statusText}`);
+  }
+
+  const data = await response.json();
+  const result = JSON.parse(data.choices[0].message.content);
+
+  console.log('[V3 Stage 1] Response:', result);
+
+  // 4. Validate (basic sanity checks only - structured outputs guarantee valid JSON)
+  if (!result.genre || typeof result.genre !== 'string') {
+    throw new Error('Invalid response: missing or invalid genre');
+  }
+
+  if (!Array.isArray(result.questions)) {
+    throw new Error('Invalid response: questions must be array');
+  }
+
+  if (result.questions.length < 3 || result.questions.length > 4) {
+    throw new Error(`Invalid response: expected 3-4 questions, got ${result.questions.length}`);
+  }
+
+  // 5. Normalize to Question[] format
+  const questions: Question[] = result.questions.map((q: any, index: number) => ({
+    id: q.id || `q${index + 1}`,
+    question: q.question,
+    type: 'radio' as const,
+    dimension: (q.focus?.toLowerCase().replace(/\s+/g, '_') || 'constraints') as any,
+    options: q.options || [],
+    required: true,
+  }));
+
+  console.log('[V3 Stage 1] Generated', questions.length, 'questions');
+
+  return {
+    genre: result.genre,
+    questions,
+  };
+}
+
+/**
+ * V3 Stage 2: Dynamic Mega-Prompt Compiler
+ * Uses claude-3.5-sonnet (max_tokens: 2000)
+ */
+export async function compileMegaPromptV3(
+  topic: string,
+  questions: Question[],
+  answers: Answer[],
+  config: AIEngineConfig
+): Promise<string> {
+  console.log('[V3 Stage 2] Compiling mega-prompt...');
+
+  // 1. Get Anthropic API key
+  const apiKey = await getAnthropicKey(config);
+
+  // 2. Build prompts
+  const systemPrompt = getV3Stage2SystemPrompt();
+  const userPrompt = getV3Stage2UserPrompt(topic, answers, questions);
+
+  // 3. Call Anthropic
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 2000,
+      system: systemPrompt,
+      messages: [{ role: 'user', content: userPrompt }],
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(`Anthropic error: ${err?.error?.message ?? response.statusText}`);
+  }
+
+  const data = await response.json();
+  const megaPrompt = data.content[0].text;
+
+  // 4. Basic validation (no repair loop)
+  if (!megaPrompt || megaPrompt.trim().length < 100) {
+    throw new Error('Invalid mega-prompt: too short or empty');
+  }
+
+  console.log('[V3 Stage 2] Compiled mega-prompt:', megaPrompt.length, 'characters');
+
+  return megaPrompt.trim();
 }
