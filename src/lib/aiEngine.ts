@@ -802,12 +802,12 @@ export async function generateContextQuestions(
   }
 
   // 4. Parse JSON response
-  const parsed = extractFirstJsonObject(rawResponse);
-  if (!parsed) {
-    throw new Error('Failed to parse JSON response from AI');
+  const jsonStr = extractFirstJsonObject(rawResponse);
+  if (!jsonStr) {
+    throw new Error('Failed to extract JSON from AI response');
   }
 
-  const result = parsed as any as { genre: string; questions: any[] };
+  const result = JSON.parse(jsonStr) as { genre: string; questions: any[] };
 
   console.log('[V3 Stage 1] Response:', result);
 

@@ -12,9 +12,9 @@
       "_useAppStore-CdEbkMje.js"
     ]
   },
-  "_content.tsx-loader-BtS-YJFe.js": {
-    "file": "assets/content.tsx-loader-BtS-YJFe.js",
-    "src": "_content.tsx-loader-BtS-YJFe.js"
+  "_content.tsx-loader-CpFi7nVL.js": {
+    "file": "assets/content.tsx-loader-CpFi7nVL.js",
+    "src": "_content.tsx-loader-CpFi7nVL.js"
   },
   "_index-BBIvZX-j.css": {
     "file": "assets/index-BBIvZX-j.css",
@@ -59,7 +59,7 @@
     "isEntry": true
   },
   "src/content.tsx": {
-    "file": "assets/content.tsx-D0WUe8pC.js",
+    "file": "assets/content.tsx-Cd3-h2Uz.js",
     "name": "content.tsx",
     "src": "src/content.tsx",
     "isEntry": true,
