@@ -1,0 +1,1 @@
+import"./utils-P31o8Rby.js";const s={success:t=>window.dispatchEvent(new CustomEvent("toast",{detail:{type:"success",message:t}})),error:t=>window.dispatchEvent(new CustomEvent("toast",{detail:{type:"error",message:t}})),info:t=>window.dispatchEvent(new CustomEvent("toast",{detail:{type:"info",message:t}}))};export{s as t};

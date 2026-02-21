@@ -167,11 +167,19 @@ chrome.runtime.onMessage.addListener((
   console.log('Received message:', message);
 
   switch (message.type) {
+    // NEW: Generic AI completion handler (network-only)
+    case 'AI_RAW_COMPLETE':
+      handleAIRawComplete(message.payload)
+        .then(sendResponse)
+        .catch((error) => sendResponse({ ok: false, error: error.message }));
+      return true; // Keep channel open for async response
+
+    // DEPRECATED: Keep for backward compatibility
     case 'GENERATE_QUESTIONS':
       handleGenerateQuestions(message.payload)
         .then(sendResponse)
         .catch((error) => sendResponse({ error: error.message }));
-      return true; // Keep channel open for async response
+      return true;
 
     case 'GENERATE_MEGA_PROMPT':
       handleGenerateMegaPrompt(message.payload)
@@ -492,6 +500,221 @@ async function generateMegaPromptAnthropic(topic: string, answers: any[], questi
   const data = await response.json();
   const megaPrompt = (data.content[0].text as string).trim();
   return { megaPrompt };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GENERIC AI COMPLETION (Network-Only)
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Generic AI completion handler - network-only, no prompt logic
+ */
+async function handleAIRawComplete(payload: {
+  provider: 'openai' | 'anthropic' | 'gemini' | 'grok';
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  temperature?: number;
+  maxTokens?: number;
+}): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  const { provider, messages, temperature = 0.7, maxTokens = 2048 } = payload;
+
+  try {
+    // Get API keys from storage
+    const result = await chrome.storage.local.get('apiKeys');
+    const apiKeys = (result.apiKeys ?? {}) as Record<string, string>;
+
+    if (!apiKeys[provider]) {
+      return { ok: false, error: `No API key found for provider: ${provider}` };
+    }
+
+    let text: string;
+
+    switch (provider) {
+      case 'openai':
+        text = await callOpenAI(messages, apiKeys['openai'], temperature, maxTokens);
+        break;
+
+      case 'anthropic':
+        text = await callAnthropic(messages, apiKeys['anthropic'], temperature, maxTokens);
+        break;
+
+      case 'gemini':
+        text = await callGemini(messages, apiKeys['gemini'], temperature, maxTokens);
+        break;
+
+      case 'grok':
+        text = await callGrok(messages, apiKeys['grok'], temperature, maxTokens);
+        break;
+
+      default:
+        return { ok: false, error: `Unknown provider: ${provider}` };
+    }
+
+    return { ok: true, text };
+  } catch (error: any) {
+    return { ok: false, error: error.message ?? 'Unknown error' };
+  }
+}
+
+/**
+ * Call OpenAI API (network-only)
+ */
+async function callOpenAI(
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+  apiKey: string,
+  temperature: number,
+  maxTokens: number
+): Promise<string> {
+  // Convert messages to OpenAI format (system + user/assistant)
+  const openaiMessages = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'gpt-4o',
+      temperature,
+      max_tokens: maxTokens,
+      messages: openaiMessages,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(`OpenAI error: ${err?.error?.message ?? response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0].message.content as string;
+}
+
+/**
+ * Call Anthropic API (network-only)
+ */
+async function callAnthropic(
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+  apiKey: string,
+  temperature: number,
+  maxTokens: number
+): Promise<string> {
+  // Extract system message (Anthropic requires separate system parameter)
+  const systemMessage = messages.find((m) => m.role === 'system');
+  const conversationMessages = messages.filter((m) => m.role !== 'system');
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true',
+    },
+    body: JSON.stringify({
+      model: 'claude-sonnet-4-5-20250929',
+      max_tokens: maxTokens,
+      temperature,
+      system: systemMessage?.content ?? '',
+      messages: conversationMessages,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(`Anthropic error: ${err?.error?.message ?? response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data.content[0].text as string;
+}
+
+/**
+ * Call Gemini API (network-only)
+ */
+async function callGemini(
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+  apiKey: string,
+  temperature: number,
+  maxTokens: number
+): Promise<string> {
+  // Extract system message (Gemini uses systemInstruction)
+  const systemMessage = messages.find((m) => m.role === 'system');
+  const conversationMessages = messages.filter((m) => m.role !== 'system');
+
+  // Convert to Gemini format
+  const contents = conversationMessages.map((m) => ({
+    role: m.role === 'assistant' ? 'model' : 'user',
+    parts: [{ text: m.content }],
+  }));
+
+  const response = await fetch(
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents,
+        systemInstruction: systemMessage
+          ? { parts: [{ text: systemMessage.content }] }
+          : undefined,
+        generationConfig: {
+          temperature,
+          maxOutputTokens: maxTokens,
+        },
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(`Gemini error: ${err?.error?.message ?? response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data.candidates[0].content.parts[0].text as string;
+}
+
+/**
+ * Call Grok API (network-only)
+ * Grok uses OpenAI-compatible API format
+ */
+async function callGrok(
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>,
+  apiKey: string,
+  temperature: number,
+  maxTokens: number
+): Promise<string> {
+  // Convert messages to Grok format (same as OpenAI)
+  const grokMessages = messages.map((m) => ({
+    role: m.role,
+    content: m.content,
+  }));
+
+  const response = await fetch('https://api.x.ai/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      model: 'grok-beta',  // Using grok-beta model
+      temperature,
+      max_tokens: maxTokens,
+      messages: grokMessages,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(`Grok error: ${err?.error?.message ?? response.statusText}`);
+  }
+
+  const data = await response.json();
+  return data.choices[0].message.content as string;
 }
 
 export {};

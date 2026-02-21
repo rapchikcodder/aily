@@ -37,7 +37,7 @@ export interface GeneratedPrompt {
   };
 }
 
-export type AIProvider = 'local' | 'openai' | 'anthropic' | 'gemini';
+export type AIProvider = 'local' | 'openai' | 'anthropic' | 'gemini' | 'grok';
 
 interface AppState {
   // Interview state
@@ -56,6 +56,7 @@ interface AppState {
     openai?: string;
     anthropic?: string;
     gemini?: string;
+    grok?: string;
   };
   customVariables: Variable[];
 
@@ -73,7 +74,7 @@ interface AppState {
   checkLocalAI: () => Promise<void>;
   setAIProvider: (provider: AIProvider) => void;
 
-  setAPIKey: (provider: 'openai' | 'anthropic' | 'gemini', key: string) => void;
+  setAPIKey: (provider: 'openai' | 'anthropic' | 'gemini' | 'grok', key: string) => void;
   addCustomVariable: (variable: Variable) => void;
   removeCustomVariable: (trigger: string) => void;
 
@@ -200,7 +201,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   loadFromStorage: async () => {
-    if (typeof chrome !== 'undefined' && chrome.storage) {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       try {
         const result = await chrome.storage.local.get([
           'apiKeys',
@@ -228,7 +229,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   saveToStorage: async () => {
-    if (typeof chrome !== 'undefined' && chrome.storage) {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       try {
         const { apiKeys, customVariables, promptHistory, aiProvider } = get();
         await chrome.storage.local.set({

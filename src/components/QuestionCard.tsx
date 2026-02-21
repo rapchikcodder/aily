@@ -1,6 +1,7 @@
 // FR-001.4: Typeform-style individual question display
 import { useState, useEffect, useRef } from 'react';
 import { cn } from '../lib/utils';
+import { StepIndicator } from './ui/StepIndicator';
 import type { Question, Answer } from '../stores/useAppStore';
 
 interface QuestionCardProps {
@@ -95,43 +96,22 @@ export function QuestionCard({
   };
 
   const hasValue = Array.isArray(value) ? value.length > 0 : value !== '' && value !== null;
-  const progress = ((currentIndex + 1) / total) * 100;
-
-  const base = isDark
-    ? 'bg-gray-900 text-gray-100 border-gray-700'
-    : 'bg-white text-gray-900 border-gray-200';
-
-  const inputBase = isDark
-    ? 'bg-gray-800 border-gray-600 text-gray-100 placeholder-gray-500 focus:border-blue-400'
-    : 'bg-gray-50 border-gray-300 text-gray-900 placeholder-gray-400 focus:border-blue-500';
-
-  const primaryBtn = 'bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-40 disabled:cursor-not-allowed';
-  const secondaryBtn = isDark
-    ? 'bg-gray-700 hover:bg-gray-600 text-gray-200'
-    : 'bg-gray-100 hover:bg-gray-200 text-gray-700';
 
   return (
-    <div className={cn('flex flex-col h-full', base)}>
-      {/* Progress bar */}
-      <div className={cn('h-1 w-full', isDark ? 'bg-gray-700' : 'bg-gray-100')}>
-        <div
-          className="h-full bg-blue-500 transition-all duration-500 ease-out"
-          style={{ width: `${progress}%` }}
-        />
-      </div>
-
-      {/* Progress text */}
-      <div className="px-6 pt-4 pb-2 text-sm text-center opacity-60">
-        Question {currentIndex + 1} of {total}
-      </div>
+    <div className="h-full flex flex-col card-clean">
+      {/* Step indicator instead of progress bar */}
+      <StepIndicator currentStep={currentIndex + 1} totalSteps={total} isDark={isDark} />
 
       {/* Question + Input */}
       <div className="flex-1 flex flex-col justify-center px-6 py-4 gap-6 overflow-y-auto">
-        <p className="text-lg font-semibold leading-snug text-center">
-          {question.question}
-        </p>
+        {/* Question text with background card */}
+        <div className="bg-blue-50 dark:bg-blue-900/20 border-2 border-blue-200 dark:border-blue-700 rounded-lg p-6 shadow-sm animate-in fade-in slide-in-from-bottom-4 duration-500">
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-gray-100 text-center leading-tight">
+            {question.question}
+          </h2>
+        </div>
 
-        {/* Text input */}
+        {/* Text input with clean styling */}
         {question.type === 'text' && (
           <textarea
             ref={inputRef as React.RefObject<HTMLTextAreaElement>}
@@ -140,14 +120,11 @@ export function QuestionCard({
             onKeyDown={handleKeyDown}
             placeholder="Type your answer..."
             rows={4}
-            className={cn(
-              'w-full resize-none rounded-xl border px-4 py-3 text-sm outline-none transition-colors',
-              inputBase
-            )}
+            className="input-clean resize-none text-sm"
           />
         )}
 
-        {/* Radio (single choice) */}
+        {/* Radio (single choice) with clean selection */}
         {question.type === 'radio' && (
           <div className="flex flex-col gap-3">
             <div className="flex flex-col gap-2 max-h-56 overflow-y-auto pr-1">
@@ -156,12 +133,10 @@ export function QuestionCard({
                   key={opt}
                   onClick={() => setValue(opt)}
                   className={cn(
-                    'w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all',
+                    'w-full text-left px-4 py-3 rounded-lg border-2 text-sm font-medium transition-all duration-200',
                     value === opt
-                      ? 'border-blue-500 bg-blue-600 text-white'
-                      : isDark
-                      ? 'border-gray-600 bg-gray-800 text-gray-200 hover:border-blue-400'
-                      : 'border-gray-300 bg-white text-gray-800 hover:border-blue-400'
+                      ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
+                      : 'border-gray-200 dark:border-gray-700 hover:border-blue-500 bg-white dark:bg-gray-800'
                   )}
                 >
                   {opt}
@@ -172,12 +147,10 @@ export function QuestionCard({
               <button
                 onClick={() => setValue('Other')}
                 className={cn(
-                  'w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all',
+                  'w-full text-left px-4 py-3 rounded-lg border-2 text-sm font-medium transition-all duration-200',
                   value === 'Other'
-                    ? 'border-blue-500 bg-blue-600 text-white'
-                    : isDark
-                    ? 'border-gray-600 bg-gray-800 text-gray-200 hover:border-blue-400'
-                    : 'border-gray-300 bg-white text-gray-800 hover:border-blue-400'
+                    ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
+                    : 'border-gray-200 dark:border-gray-700 hover:border-blue-500 bg-white dark:bg-gray-800'
                 )}
               >
                 Other (please specify)
@@ -192,16 +165,13 @@ export function QuestionCard({
                 onChange={(e) => setCustomText(e.target.value)}
                 placeholder="Please specify..."
                 autoFocus
-                className={cn(
-                  'w-full rounded-xl border px-4 py-3 text-sm outline-none transition-colors',
-                  inputBase
-                )}
+                className="input-clean text-sm"
               />
             )}
           </div>
         )}
 
-        {/* Checkbox (multi choice) */}
+        {/* Checkbox (multi choice) with clean selection */}
         {question.type === 'checkbox' && (
           <div className="flex flex-col gap-3">
             <div className="flex flex-col gap-2 max-h-56 overflow-y-auto pr-1">
@@ -217,12 +187,10 @@ export function QuestionCard({
                       );
                     }}
                     className={cn(
-                      'w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all flex items-center gap-3',
+                      'w-full text-left px-4 py-3 rounded-lg border-2 text-sm font-medium transition-all duration-200 flex items-center gap-3',
                       selected
-                        ? 'border-blue-500 bg-blue-600 text-white'
-                        : isDark
-                        ? 'border-gray-600 bg-gray-800 text-gray-200 hover:border-blue-400'
-                        : 'border-gray-300 bg-white text-gray-800 hover:border-blue-400'
+                        ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
+                        : 'border-gray-200 dark:border-gray-700 hover:border-blue-500 bg-white dark:bg-gray-800'
                     )}
                   >
                     <span
@@ -237,7 +205,7 @@ export function QuestionCard({
                         </svg>
                       )}
                     </span>
-                    {opt}
+                    <span>{opt}</span>
                   </button>
                 );
               })}
@@ -252,12 +220,10 @@ export function QuestionCard({
                   );
                 }}
                 className={cn(
-                  'w-full text-left px-4 py-3 rounded-xl border text-sm font-medium transition-all flex items-center gap-3',
+                  'w-full text-left px-4 py-3 rounded-lg border-2 text-sm font-medium transition-all duration-200 flex items-center gap-3',
                   (value as string[]).includes('Other')
-                    ? 'border-blue-500 bg-blue-600 text-white'
-                    : isDark
-                    ? 'border-gray-600 bg-gray-800 text-gray-200 hover:border-blue-400'
-                    : 'border-gray-300 bg-white text-gray-800 hover:border-blue-400'
+                    ? 'border-blue-500 bg-blue-500 text-white shadow-sm'
+                    : 'border-gray-200 dark:border-gray-700 hover:border-blue-500 bg-white dark:bg-gray-800'
                 )}
               >
                 <span
@@ -272,7 +238,7 @@ export function QuestionCard({
                     </svg>
                   )}
                 </span>
-                Other (please specify)
+                <span>Other (please specify)</span>
               </button>
             </div>
 
@@ -283,10 +249,7 @@ export function QuestionCard({
                 value={customText}
                 onChange={(e) => setCustomText(e.target.value)}
                 placeholder="Please specify..."
-                className={cn(
-                  'w-full rounded-xl border px-4 py-3 text-sm outline-none transition-colors',
-                  inputBase
-                )}
+                className="input-clean text-sm"
               />
             )}
           </div>
@@ -314,10 +277,13 @@ export function QuestionCard({
       </div>
 
       {/* Footer actions */}
-      <div className={cn('flex items-center justify-between px-6 py-4 border-t', isDark ? 'border-gray-700' : 'border-gray-100')}>
+      <div className="flex items-center justify-between px-6 py-4 border-t border-gray-200 dark:border-gray-700">
         <div className="flex items-center gap-3">
           {currentIndex > 0 && (
-            <button onClick={onBack} className={cn('px-4 py-2 rounded-lg text-sm font-medium transition-colors', secondaryBtn)}>
+            <button
+              onClick={onBack}
+              className="btn-secondary"
+            >
               ← Back
             </button>
           )}
@@ -330,9 +296,12 @@ export function QuestionCard({
         <button
           onClick={handleCommit}
           disabled={!hasValue && question.required}
-          className={cn('px-5 py-2 rounded-lg text-sm font-semibold transition-all', primaryBtn)}
+          className={cn(
+            'btn-primary',
+            'disabled:opacity-50 disabled:cursor-not-allowed'
+          )}
         >
-          {currentIndex === total - 1 ? 'Finish →' : 'Next →'}
+          {currentIndex === total - 1 ? 'Finish' : 'Next'} →
         </button>
       </div>
     </div>

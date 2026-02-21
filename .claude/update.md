@@ -1,304 +1,496 @@
-The 5 changes you’re implementing
+Below is a **much more detailed, “delete old → build new → fix old issues”** implementation plan, written exactly in the style you can paste into **Claude Code** to refactor your repo cleanly.
 
-Dimension-based questions (taxonomy + uniqueness)
+I’m going to:
 
-Intent-lock + “highest-impact uncertainty”
+1. tell you **what to delete / deprecate**
+2. tell you **what to build new** (files + functions + message types)
+3. tell you **what to fix** (your current pain points: duplication, inconsistent injection, brittle JSON, static questions)
+4. give you **a single master Claude Code prompt** that instructs it to do all of it safely
 
-Few-shot examples per task family
+---
 
-Self-check + revise before output
+## What to delete / deprecate (old flow)
 
-Stage-2 “Decision Summary” instead of raw Q&A dump (plus hard length control)
+### Delete / deprecate these behaviors
 
-Why these are the “best 5”: they directly match Anthropic’s guidance on structured prompting and specificity , plus proven few-shot steering .
+1. **Static Stage-1 “generate 3–5 questions at once” as the default**
 
-A. Implementation plan (step-by-step)
-Step 1 — Add a dimension taxonomy to Stage 1
-Goal
+   * Keep it only as a fallback helper (optional), but **the main flow becomes adaptive**:
+   * Ask Q1 → user answers → generate Q2 based on Q/A → …
 
-Every question must map to a different dimension. This is the single biggest way to prevent “generic / repetitive / off-context” questions.
+2. **Prompt duplication between `background.ts` and `aiEngine.ts`**
 
-Dimensions (keep these fixed)
+   * Remove prompt strings from background entirely.
+   * Background should only do **network fetch**. No prompt logic.
 
-deliverable (what output is needed)
+3. **“Fence stripping + JSON.parse + hope” without a strict validator**
 
-audience (who it’s for)
+   * Replace with:
+   * strict parsing + validation + one repair attempt
 
-inputs (what materials exist / needed)
+4. **Inconsistent injection across local vs cloud**
 
-constraints (length, format, must/avoid, deadlines, citations)
+   * Make injection happen in one place (aiEngine) and pass it to background when needed.
 
-style_tone (optional)
+---
 
-Code changes
+## What to build new (clean v2 architecture)
 
-Stage 1 JSON schema: add "dimension" field with enum above.
+### New core building blocks (files)
 
-Validate: no duplicates, 3–5 questions total, correct type/options.
+Create these files:
 
-Why this is best practice
+1. `src/lib/prompts/index.ts`
 
-It operationalizes “different dimension” (which is otherwise subjective and fails under pressure).
+   * sole source of truth for all prompt templates:
 
-Step 2 — Replace “missing context” with “highest-impact uncertainty”
-Goal
+     * `buildNextQuestionSystemPrompt()`
+     * `buildNextQuestionUserPrompt({...})`
+     * `buildMegaPromptSystemPrompt()`
+     * `buildMegaPromptUserPrompt({...})`
+     * `buildRepairJsonSystemPrompt()` + `buildRepairJsonUserPrompt({...})`
 
-Questions should focus on what would most change the final output (not “nice-to-know”).
+2. `src/lib/validators.ts`
 
-Code changes
+   * `extractFirstJsonObject(text: string): string | null`
+   * `safeJsonParse(text: string): unknown`
+   * `validateQuestion(q, askedDims): string[]`
+   * `validateNextQuestionResponse(obj, askedQuestions, minQ, maxQ): string[]`
+   * `validateMegaPrompt(text): { ok: boolean; issues: string[] }`
 
-Update Stage 1 system prompt: “Ask the 3–5 questions whose answers would most change the output.”
+3. `src/lib/intent.ts`
 
-Why this is best practice
+   * `inferIntent(topic: string, asked: Question[], answers: Answer[])`
+   * returns:
 
-This is a common failure mode: models default to fluff (tone, preferences) instead of “what is the deliverable” / “constraints”.
+     * `taskFamily`
+     * `deliverableHint`
+     * `knownDimensions`
+     * `missingDimensionsRanked`
+     * `mustAskNext` (e.g. inputs missing for coding, deliverable missing for writing)
 
-Step 3 — Add intent-lock rules
-Goal
+4. `src/lib/interviewPolicy.ts`
 
-Stop the model from “helpfully” reframing the task.
+   * deterministic stop conditions:
 
-Add these exact rules to Stage 1
+     * `shouldStopInterview({asked, answers, minQ, maxQ, remainingDims}): { stop: boolean; reason?: string }`
+   * ranking policy:
 
-“Do NOT change the user’s goal or task type.”
+     * `rankDimensions({intent, remainingDims}): Dimension[]`
 
-“Do NOT propose solutions.”
+### New AI methods (aiEngine)
 
-“Do NOT assume missing facts.”
+Add:
 
-“If the topic already contains a dimension (e.g., audience), do not ask it again.”
+* `generateNextQuestion(topic, asked, answers, config, minQ=3, maxQ=5)`
+* `repairNextQuestionResponse(rawText, validationErrors, context, config)`
+* `repairQuestionsJson(rawText, validationErrors, config)` (reusable)
+* `maybeTightenMegaPrompt(rawMega, issues, config)`
 
-This aligns with general Claude prompting best practice: be explicit and structured.
+### New background message types
 
-Step 4 — Add few-shot examples (only 1–2, task-family specific)
-Goal
+Add these message handlers:
 
-Few-shot examples dramatically reduce generic questions and improve format adherence.
+* `AI_RAW_COMPLETE` (generic completion)
 
-Code changes
+  * Background receives: `provider, messages, temperature, maxTokens`
+  * Background returns: `{ text: string }`
+  * **That’s it.**
+  * It doesn’t know about “questions” or “mega prompts”.
 
-Add a tiny “task family” classifier:
+This is how you delete all duplication.
 
-writing / coding / marketing / design / analysis-planning
+---
 
-Inject the matching example block into Stage 1 system prompt.
+## What to fix (old issues you mentioned + I observed earlier)
 
-Best practice
+### Fix 1 — Adaptive questioning (your request)
 
-Use only 1 example most of the time to avoid bloat. Examples are more powerful than extra rules.
+**UI no longer preloads 3–5 questions.**
+Instead it loops:
 
-Step 5 — Add a self-check + revise step inside Stage 1
-Goal
+* ask 1 question
+* user answers
+* model decides next best question based on Q/A + remaining dimensions
+* stop at 3–5 or when policy says done
 
-Make the model verify its own output against your constraints and silently fix mistakes before returning JSON.
+### Fix 2 — “Local vs cloud output mismatch”
 
-This is strongly aligned with “self-critique / revise” patterns that Anthropic popularized in Constitutional AI research.
+* Always build prompts in `aiEngine.ts`
+* Always run `variableInjector` inside aiEngine
+* When calling cloud, pass injection blocks inside the user prompt
+* Background is just a dumb fetcher
 
-Code changes
+### Fix 3 — JSON brittleness
 
-No extra API call needed: add instruction “validate then revise before output”.
+* Add `extractFirstJsonObject()` (or array) and parse only that region
+* Validate strongly
+* If invalid → one repair attempt with a repair prompt
 
-Add a post-parse validator; if it fails, do a single retry with a “repair” instruction.
+### Fix 4 — Duplicate prompt definitions / drift
 
-Step 6 — Stage 2: convert Q&A → Decision Summary (and cap length)
-Goal
+* Move every prompt string into `src/lib/prompts/index.ts`
+* Background imports nothing prompt-related (or just uses raw messages it receives)
 
-Stage 2 should produce a clean CO-STAR prompt that’s comprehensive but not bloated.
+### Fix 5 — “Out of context questions”
 
-Code changes
+* Use intent inference + dimension ranking:
 
-In Stage 2 system prompt:
+  * coding: prioritize `inputs` (error / repro), `constraints` (env), then deliverable
+  * writing: deliverable + audience + must-include points
+* Use “remaining dimensions” computed in code and passed to the model:
 
-“Convert Q&A to a compact Decision Summary.”
+  * model is only allowed to pick from remaining dims
 
-“Limit to ~250–400 words unless user explicitly wants long.”
+---
 
-“Include assumptions + open questions if answers conflict.”
+# EXACT code-level changes by file (what you’ll tell Claude Code)
 
-This directly reflects the “be specific with constraints” guidance.
+## 1) `src/background.ts` — simplify to a generic completion worker
 
-B. The best Stage 1 prompt (Claude Code, XML-tag structured)
+### Before:
 
-Use this as your Stage 1 SYSTEM prompt (drop-in):
+* `GENERATE_QUESTIONS`
+* `GENERATE_MEGA_PROMPT`
+* provider logic + prompt strings + parsing
 
-You are a Socratic prompt engineer. Your job is to ask high-impact clarification questions that improve the final output quality.
+### After:
 
-<rules>
-- Generate EXACTLY 3 to 5 questions.
-- Each question must cover a UNIQUE dimension from:
-  deliverable, audience, inputs, constraints, style_tone
-- Prioritize “highest-impact uncertainty”: ask what would most change the final output.
-- Intent lock: Do NOT change the user’s goal or task type. Do NOT propose solutions. Do NOT assume missing facts.
-- If the topic already clearly contains a dimension, do not ask that dimension again.
-- Be specific: never ask “tell me more” or vague questions.
-- Output MUST be valid JSON only (no markdown, no commentary).
-</rules>
+* Keep provider logic
+* Replace with **one** message type:
 
-<output_schema>
-Return a JSON array of objects with:
+```ts
+type AIRawCompleteMessage = {
+  type: 'AI_RAW_COMPLETE';
+  payload: {
+    provider: 'openai'|'anthropic'|'gemini';
+    messages: Array<{ role: 'system'|'user'|'assistant'; content: string }>;
+    temperature?: number;
+    maxTokens?: number;
+  };
+};
+```
+
+Background returns:
+
+```ts
+{ ok: true, text: string } | { ok: false, error: string }
+```
+
+**Delete** the “question generation” and “mega prompt” handlers.
+
+This alone removes 70% of drift.
+
+---
+
+## 2) `src/lib/aiEngine.ts` — becomes the brain
+
+### New functions to add
+
+#### `completeWithProvider(...)`
+
+* If local provider: use `window.ai.languageModel`
+* If cloud provider: send `AI_RAW_COMPLETE` to background
+
+This consolidates all “call model” paths into one.
+
+#### `generateNextQuestion(...)` (core)
+
+Steps:
+
+1. `intent = inferIntent(topic, asked, answers)`
+2. `remainingDims = remainingDims(asked)`
+3. `policyStop = shouldStopInterview(...)`
+
+   * if stop → return `{ done:true, reason }` without calling model (saves cost)
+4. build prompts from prompt pack:
+
+   * systemPrompt = `buildNextQuestionSystemPrompt()`
+   * userPrompt = `buildNextQuestionUserPrompt({topic, asked, answers, intent, remainingDims, minQ, maxQ})`
+5. call `completeWithProvider`
+6. parse → validate
+7. if invalid → repair once → parse → validate
+8. return `{ done, question?, reason? }`
+
+---
+
+## 3) `src/components/InterviewOverlay.tsx` — change UI state machine
+
+### Current behavior:
+
+* on mount generate all questions
+* step through them
+* compile at end
+
+### New behavior:
+
+* on mount call `generateNextQuestion` once
+* append question and show it
+* on Next from last question:
+
+  * if not enough questions → generate next
+  * else ask `generateNextQuestion` and:
+
+    * if done → compile mega prompt
+    * else append and continue
+
+### Must include:
+
+* disable Next button while generating
+* error handling: if next question fails twice, fallback to compile with current answers (never hard-block user)
+
+---
+
+## 4) `src/lib/variableInjector.ts` — fix hair-trigger matching
+
+Change `.includes(trigger)` to:
+
+* word boundary match OR
+* match only on selected question IDs (best)
+
+This reduces accidental injection.
+
+---
+
+# The best “NEXT QUESTION” prompt (drop-in prompt pack)
+
+### `buildNextQuestionSystemPrompt()`
+
+Make it strict and model-agnostic:
+
+```text
+You are an adaptive Socratic interviewer.
+
+Rules:
+- Ask ONE best next question only, OR decide the interview is done.
+- Do NOT change the user's goal.
+- Do NOT propose solutions.
+- Do NOT assume facts.
+- The next question must choose a dimension ONLY from the provided RemainingDimensions list.
+- Do NOT repeat a dimension that was already asked.
+- Prefer highest information gain: what answer would most change the final result.
+
+Output must be valid JSON only with one of these forms:
+
+A) Ask next question:
 {
-  "id": "q1" | "q2" | "q3" | "q4" | "q5",
-  "dimension": "deliverable" | "audience" | "inputs" | "constraints" | "style_tone",
-  "question": "string",
-  "type": "radio" | "checkbox" | "text" | "scale",
-  "options": ["..."] (required for radio/checkbox; omit otherwise),
-  "required": true | false
+  "done": false,
+  "question": {
+    "id": "qN",
+    "dimension": "deliverable|audience|inputs|constraints|style_tone",
+    "question": "…",
+    "type": "radio|checkbox|text|scale",
+    "options": ["..."]  // required only for radio/checkbox
+    "required": true
+  }
 }
-</output_schema>
 
-<self_check_before_output>
-Verify:
-- 3–5 items
-- unique dimensions
-- radio/checkbox include options; scale/text omit options
-- questions are specific and aligned to the original goal
-If any check fails, silently revise and output only the corrected JSON.
-</self_check_before_output>
+B) Done:
+{ "done": true, "reason": "..." }
 
+Constraints:
+- dimension must be one of RemainingDimensions
+- radio/checkbox must include options with >= 2 items
+- text/scale must not include options
+- scale must clearly define 1 and 10 endpoints in the question text
+```
 
-And your Stage 1 USER prompt:
+### `buildNextQuestionUserPrompt(...)`
 
-<topic>
-The user wants to: "{{TOPIC}}"
-</topic>
+```text
+Topic:
+{{TOPIC}}
 
-Generate the questions now.
+Already asked questions:
+{{ASKED_QUESTIONS_LIST}}
 
-
-Why this works well for Claude:
-
-Anthropic recommends structured prompts (XML tags are a known best practice pattern in their ecosystem).
-
-C. Few-shot examples: the “best” 1-per-family set
-
-You asked for “only best examples”. These are the most reusable, high-signal ones.
-
-Example 1 — Writing (email/letter)
-<example>
-Topic: "write an email to a client about delayed delivery"
-
-Good output questions:
-- deliverable (radio): "What type of message is this?" options: ["Apology + new ETA", "Status update", "Compensation offer", "Request more time"]
-- audience (radio): "Who is the recipient?" options: ["New client", "Existing client", "Enterprise stakeholder", "Internal team"]
-- constraints (checkbox): "Any constraints to follow?" options: ["Must be under 120 words", "Must include new ETA date", "Avoid admitting fault", "Include escalation contact"]
-- inputs (text): "What order/project details must be referenced (order ID, product, promised date)?"
-</example>
-
-Example 2 — Coding (build/debug)
-<example>
-Topic: "fix a bug in my React app"
-
-Good output questions:
-- inputs (checkbox): "What can you share?" options: ["Error message", "Relevant code snippet", "Steps to reproduce", "Expected vs actual behavior"]
-- constraints (radio): "Where should the fix be applied?" options: ["Minimal change", "Refactor ok", "Performance priority", "Stability priority"]
-- deliverable (radio): "What output do you want?" options: ["Patch diff", "Explanation + fix", "Step-by-step debug plan", "Refactor proposal"]
-- environment (text, map to constraints): "React version, bundler (Vite/Next), and where it runs (dev/prod)?"
-</example>
-
-Example 3 — Marketing/Strategy
-<example>
-Topic: "make a campaign plan for a new skincare launch"
-
-Good output questions:
-- deliverable (radio): "What do you need?" options: ["One-page strategy", "Channel plan", "Creative angles", "Full deck outline"]
-- audience (radio): "Who is this for?" options: ["Brand manager", "Agency team", "Leadership", "Sales enablement"]
-- constraints (checkbox): "Key constraints?" options: ["Budget range", "Timeline", "Geos", "Must include benchmarks/citations", "Regulatory limits"]
-- inputs (text): "Product RTBs, target persona, and any prior performance data?"
-- style_tone (scale): "1=corporate formal, 10=Gen Z punchy"
-</example>
-
-
-These align with few-shot best practices: small number of demonstrations to steer behavior.
-
-D. Stage 2 best prompt (CO-STAR + Decision Summary + length control)
-
-Stage 2 SYSTEM prompt (Claude Code):
-
-You are a master prompt engineer. Compile interview answers into a single structured CO-STAR mega-prompt that is ready to paste into Claude or ChatGPT.
-
-<rules>
-- Convert the Interview Q&A into a compact "Decision Summary" (not a verbatim dump).
-- Prioritize only decisions that materially affect the output.
-- If an answer is vague/low-signal, compress it to <= 10 words.
-- If answers conflict or essential info is missing, add 1–3 "Open Questions" at the end.
-- Keep the final mega-prompt ~250–400 words unless the user explicitly requested long form.
-- Output in clear markdown.
-</rules>
-
-<format>
-### CO-STAR Mega-Prompt: {title}
-
-**Context:**
-...
-
-**Objective:**
-...
-
-**Style:**
-...
-
-**Tone:**
-...
-
-**Audience:**
-...
-
-**Response Requirements:**
-- bullets...
-
-**Open Questions (if needed):**
-- ...
-</format>
-
-
-Stage 2 USER prompt:
-
-<original_goal>
-"{{TOPIC}}"
-</original_goal>
-
-<decision_inputs>
-Interview Q&A:
+Answers so far:
 {{QA_TEXT}}
 
-Auto-injected context blocks:
-{{INJECTION_BLOCKS}}
-</decision_inputs>
+Interview bounds:
+- MinQuestions: {{MINQ}}
+- MaxQuestions: {{MAXQ}}
 
-Compile into CO-STAR mega-prompt now.
+RemainingDimensions (must pick from these only):
+{{REMAINING_DIMS_JSON_ARRAY}}
 
+Intent hints (do not contradict):
+{{INTENT_HINTS_JSON}}
 
-Why this is “best”
+Task:
+Return the single best next question (JSON form A), or return done=true (JSON form B) if we already have enough information to produce a high-quality final output.
+```
 
-It follows Claude’s preference for explicit structure and concrete bounds.
+---
 
-E. Minimal engineering checklist (so you actually ship it)
-✅ Change 1 (Dimensions)
+# ONE master Claude Code prompt (very detailed, delete old, build new)
 
- Add dimension to JSON output
+Copy/paste this into Claude Code:
 
- Validator: unique dimensions, count 3–5
+```text
+You are refactoring the repo https://github.com/rapchikcodder/aily.
 
-✅ Change 2 (Highest-impact uncertainty)
+Goal:
+Replace the static “generate 3–5 questions once” interview with an adaptive interview that generates one question at a time after each user answer. Also remove duplicated prompt logic, add strict validation+repair, unify injection, and fix old fragility.
 
- Update Stage 1 system rules (as above)
+Must-do outcomes:
+1) Adaptive questioning loop:
+   - generate Q1
+   - after user answers, generate next question based on Q/A so far
+   - stop when done or after 3–5 questions
+2) Background is network-only:
+   - remove prompt strings and task-specific handlers from background.ts
+   - implement a single generic handler AI_RAW_COMPLETE that takes {provider, messages, temperature, maxTokens} and returns {text}
+3) aiEngine becomes the brain:
+   - builds prompts via prompt pack
+   - calls local window.ai or background AI_RAW_COMPLETE
+   - parses, validates, repairs once if needed
+4) Strict schemas + validators:
+   - validateNextQuestionResponse, validateQuestionObject
+   - extract JSON safely even if model adds junk
+5) Fix old issues:
+   - remove prompt duplication (create src/lib/prompts/index.ts)
+   - unify variable injection across local/cloud (injection built in aiEngine and appended to Stage-2 user prompt)
+   - reduce injection false-positives (word boundary or ID-based triggers)
 
-✅ Change 3 (Intent lock)
+Steps (do these in order):
 
- Add “do not change goal / do not assume / do not propose solutions”
+A) Create new modules:
 
-✅ Change 4 (Few-shot)
+1) src/lib/prompts/index.ts
+Export:
+- buildNextQuestionSystemPrompt()
+- buildNextQuestionUserPrompt(args)
+- buildMegaPromptSystemPrompt()
+- buildMegaPromptUserPrompt(args)
+- buildRepairJsonSystemPrompt()
+- buildRepairJsonUserPrompt({rawText, errors, expectedContract})
 
- Add task family classifier (simple keyword-based is enough)
+2) src/lib/validators.ts
+Implement:
+- extractFirstJsonObject(text): string|null  (find first {...} region)
+- extractFirstJsonArray(text): string|null   (find first [...] region)
+- safeJsonParse(text): unknown
+- validateQuestionObject(q, askedQuestions): string[]
+- validateNextQuestionResponse(obj, askedQuestions, minQ, maxQ): string[]
+- validateMegaPromptText(text): { ok: boolean; issues: string[] }
+Also include helper enums:
+Dimension = 'deliverable'|'audience'|'inputs'|'constraints'|'style_tone'
 
- Inject 1 matching example into Stage 1 system prompt
+3) src/lib/intent.ts
+Implement:
+- inferIntent(topic, askedQuestions, answers):
+  returns {
+    taskFamily: 'writing'|'coding'|'marketing'|'design'|'analysis',
+    deliverableHint: { kind: string, confidence: number },
+    knownDimensions: Record<Dimension, boolean>,
+    missingCritical: Dimension[]
+  }
+Use simple deterministic heuristics + reuse existing taskClassifier if present.
 
-✅ Change 5 (Self-check)
+4) src/lib/interviewPolicy.ts
+Implement:
+- remainingDimensions(askedQuestions): Dimension[]
+- shouldStopInterview({asked, answers, minQ, maxQ, remainingDims}): { stop: boolean; reason?: string }
+Rules:
+- if asked.length >= maxQ => stop true
+- if asked.length < minQ => stop false
+- else stop if remainingDims only contains style_tone AND user already gave enough detail (non-empty answers for deliverable + audience or inputs + constraints depending on task family)
 
- Add self-check instruction
+B) Refactor background.ts:
 
- Add code validator + one retry with “REPAIR JSON to schema” if parse fails
+- Remove handlers: GENERATE_QUESTIONS, GENERATE_MEGA_PROMPT (delete old code)
+- Add handler: AI_RAW_COMPLETE
+Payload:
+{
+  provider: 'openai'|'anthropic'|'gemini',
+  messages: [{role:'system'|'user'|'assistant', content:string}] ,
+  temperature?: number,
+  maxTokens?: number
+}
+Return:
+{ ok:true, text:string } or { ok:false, error:string }
 
-Bonus (strongly recommended)
+Background must not import prompts or parse JSON. It only calls providers and returns raw text.
 
-Unify Stage 2 injection across all providers so “context” doesn’t vary by model/provider.
+C) Refactor aiEngine.ts:
+
+- Remove duplicated prompt strings if any remain.
+- Add:
+  async function completeWithProvider(config, messages, temperature, maxTokens): returns string
+  - if provider === 'local' => window.ai.languageModel
+  - else => send AI_RAW_COMPLETE to background
+
+- Add:
+  async function generateNextQuestion(topic, asked, answers, config, minQ=3, maxQ=5):
+    1) intent = inferIntent(...)
+    2) remainingDims = remainingDimensions(asked)
+    3) policy = shouldStopInterview(...)
+       if policy.stop => return {done:true, reason:policy.reason}
+    4) system = buildNextQuestionSystemPrompt()
+       user = buildNextQuestionUserPrompt({topic, asked, answers, intent, remainingDims, minQ, maxQ})
+    5) raw = completeWithProvider(...)
+    6) parse JSON object (extractFirstJsonObject → safeJsonParse)
+    7) validateNextQuestionResponse
+    8) if invalid => run repair once using repair prompts and validation errors, then re-parse and re-validate
+    9) return parsed {done, question?, reason?}
+
+- Update compileMegaPrompt(...) to:
+  1) build injectionBlocks using variableInjector ALWAYS
+  2) build system/user prompts via prompt pack
+  3) call completeWithProvider
+  4) validateMegaPromptText; if too long or generic => optional tighten pass using repairMegaPrompt prompts (one pass)
+  5) return mega prompt
+
+Keep generateQuestions(...) optionally, but mark it deprecated; InterviewOverlay should no longer use it.
+
+D) Update InterviewOverlay.tsx:
+
+- On mount:
+  - call generateNextQuestion(topic, [], [], config, 3, 5)
+  - if done true immediately (unlikely) => compileMegaPrompt with no Qs
+  - else set questions=[question], currentIndex=0
+
+- On Next click:
+  - save current answer as already done
+  - if currentIndex < questions.length-1: currentIndex++
+  - else (at last question):
+    - call generateNextQuestion(topic, questions, answers, config, 3, 5)
+    - if done true => compileMegaPrompt(...) and go to result
+    - else append question to questions and set currentIndex++
+
+- Add UI protections:
+  - disable Next while waiting for AI
+  - show spinner “Thinking…”
+  - allow Retry on error, but also allow “Continue to result” using existing answers if AI fails twice
+
+E) Fix variableInjector.ts:
+
+- Replace substring matching with word-boundary regex OR match only on specific question IDs (prefer ID-based).
+- Ensure it never injects giant blocks due to one accidental word in a free-text answer.
+
+F) Provide final notes:
+- List files changed/added/removed
+- Explain how adaptive questioning works
+- Explain how validation+repair prevents JSON failures
+- Confirm background no longer contains prompt strings or parsing
+
+Do the full refactor now and output code changes and summary.
+```
+
+---
+
+## Quick sanity checklist after you implement
+
+* ✅ After answer 1, the next question changes depending on answer
+* ✅ Questions never repeat a dimension
+* ✅ Interview stops at 3–5 questions
+* ✅ Cloud and local behave the same (same prompt pack, same injection)
+* ✅ JSON issues don’t break the flow (repair happens once)
+* ✅ Background is now “dumb pipe” (only network)
+
+If you want, I can also give you:
+
+* a ready-made `validators.ts` implementation outline (actual TS code skeleton)
+* the exact `InterviewOverlay` logic patch (pseudo-diff style)
+* a minimal “repair JSON” prompt that works well across Claude/Gemini/OpenAI

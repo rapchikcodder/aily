@@ -170,7 +170,13 @@ export function getMatchingRules(
 
   for (const rule of allRules) {
     if (seen.has(rule.trigger)) continue;
-    if (answerText.includes(rule.trigger.toLowerCase())) {
+
+    // Use word boundary matching to avoid false positives (e.g., "react" shouldn't match "create")
+    // Escape special regex characters in the trigger
+    const escapedTrigger = rule.trigger.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const triggerRegex = new RegExp(`\\b${escapedTrigger}\\b`, 'i');
+
+    if (triggerRegex.test(answerText)) {
       matched.push(rule);
       seen.add(rule.trigger);
     }

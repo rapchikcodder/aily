@@ -29,12 +29,13 @@
     "https://claude.ai/*",
     "https://api.openai.com/*",
     "https://api.anthropic.com/*",
-    "https://generativelanguage.googleapis.com/*"
+    "https://generativelanguage.googleapis.com/*",
+    "https://api.x.ai/*"
   ],
   "content_scripts": [
     {
       "js": [
-        "assets/content.tsx-loader-BL7Pdy64.js"
+        "assets/content.tsx-loader--cX1fQZN.js"
       ],
       "matches": [
         "https://chatgpt.com/*",
@@ -57,8 +58,9 @@
         "https://claude.ai/*"
       ],
       "resources": [
-        "assets/client-BaXnLZmA.js",
-        "assets/content.tsx-B_WmhGCU.js"
+        "assets/utils-P31o8Rby.js",
+        "assets/Toast-DdaPQo5K.js",
+        "assets/content.tsx-DzmNGUjr.js"
       ],
       "use_dynamic_url": false
     }

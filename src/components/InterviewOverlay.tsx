@@ -5,7 +5,9 @@ import { useState, useEffect, useCallback } from 'react';
 import { cn } from '../lib/utils';
 import { QuestionCard } from './QuestionCard';
 import { ResultScreen } from './ResultScreen';
-import { checkLocalAICapability, generateQuestions, compileMegaPrompt } from '../lib/aiEngine';
+import { QuestionSkeleton } from './ui/SkeletonLoader';
+import { PageTransition } from './ui/PageTransition';
+import { checkLocalAICapability, generateNextQuestion, compileMegaPrompt } from '../lib/aiEngine';
 import type { AIProvider } from '../lib/aiEngine';
 import type { Question, Answer } from '../stores/useAppStore';
 
@@ -21,18 +23,25 @@ interface InterviewOverlayProps {
 
 // Load AI config from chrome.storage
 async function loadAIConfig(): Promise<{ provider: AIProvider; apiKey?: string }> {
-  if (typeof chrome === 'undefined' || !chrome.storage) {
+  try {
+    if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
+      console.warn('[InterviewOverlay] Chrome storage not available, using local provider');
+      return { provider: 'local' };
+    }
+    const result = await chrome.storage.local.get(['apiKeys', 'aiProvider']);
+    const provider: AIProvider = (result.aiProvider as AIProvider | undefined) ?? 'local';
+    const keys = (result.apiKeys ?? {}) as Record<string, string>;
+    return {
+      provider,
+      apiKey: provider === 'openai' ? keys['openai'] :
+              provider === 'anthropic' ? keys['anthropic'] :
+              provider === 'gemini' ? keys['gemini'] :
+              provider === 'grok' ? keys['grok'] : undefined,
+    };
+  } catch (error) {
+    console.error('[InterviewOverlay] Error loading AI config:', error);
     return { provider: 'local' };
   }
-  const result = await chrome.storage.local.get(['apiKeys', 'aiProvider']);
-  const provider: AIProvider = (result.aiProvider as AIProvider | undefined) ?? 'local';
-  const keys = (result.apiKeys ?? {}) as Record<string, string>;
-  return {
-    provider,
-    apiKey: provider === 'openai' ? keys['openai'] :
-            provider === 'anthropic' ? keys['anthropic'] :
-            provider === 'gemini' ? keys['gemini'] : undefined,
-  };
 }
 
 export function InterviewOverlay({
@@ -50,24 +59,30 @@ export function InterviewOverlay({
   const [errorMsg, setErrorMsg] = useState('');
   // Incrementing this forces the init useEffect to re-run (used by Retry button)
   const [runKey, setRunKey] = useState(0);
+  // Adaptive questioning state
+  const [isGeneratingNext, setIsGeneratingNext] = useState(false);
+  const [generateError, setGenerateError] = useState('');
+  const [retryCount, setRetryCount] = useState(0);
+  const [canContinueWithPartial, setCanContinueWithPartial] = useState(false);
 
-  // Generate questions on mount — also re-runs when runKey changes (Retry)
+  // Generate first question on mount — also re-runs when runKey changes (Retry)
   useEffect(() => {
     let cancelled = false;
 
     async function init() {
       try {
         const config = await loadAIConfig();
-        // Auto-downgrade to gemini/openai/anthropic if local AI unavailable
+        // Auto-downgrade to gemini/grok/openai/anthropic if local AI unavailable
         if (config.provider === 'local') {
           const localOK = await checkLocalAICapability();
           if (!localOK) {
             // Check if cloud keys exist (prioritize free Gemini)
-            const storageResult = typeof chrome !== 'undefined'
+            const storageResult = (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local)
               ? await chrome.storage.local.get(['apiKeys'])
               : { apiKeys: {} };
             const keys = (storageResult.apiKeys ?? {}) as Record<string, string>;
             if (keys['gemini']) { config.provider = 'gemini'; config.apiKey = keys['gemini']; }
+            else if (keys['grok']) { config.provider = 'grok'; config.apiKey = keys['grok']; }
             else if (keys['openai']) { config.provider = 'openai'; config.apiKey = keys['openai']; }
             else if (keys['anthropic']) { config.provider = 'anthropic'; config.apiKey = keys['anthropic']; }
             else {
@@ -78,52 +93,27 @@ export function InterviewOverlay({
           }
         }
 
-        // Generate questions: use local AI directly, or background worker for cloud APIs (avoids CORS)
-        let questions: Question[];
-        if (config.provider === 'local') {
-          try {
-            // Call local AI directly from content script context (window.ai available here)
-            questions = await generateQuestions(topic, config);
-          } catch (localError: any) {
-            // Local AI failed - auto-fallback to cloud providers
-            const storageResult = typeof chrome !== 'undefined'
-              ? await chrome.storage.local.get(['apiKeys'])
-              : { apiKeys: {} };
-            const keys = (storageResult.apiKeys ?? {}) as Record<string, string>;
-
-            if (keys['gemini']) { config.provider = 'gemini'; config.apiKey = keys['gemini']; }
-            else if (keys['openai']) { config.provider = 'openai'; config.apiKey = keys['openai']; }
-            else if (keys['anthropic']) { config.provider = 'anthropic'; config.apiKey = keys['anthropic']; }
-            else {
-              throw new Error('Local AI is not available. Please add a cloud API key in Settings (Gemini is free!)');
-            }
-
-            // Retry with cloud provider
-            const response = await chrome.runtime.sendMessage({
-              type: 'GENERATE_QUESTIONS',
-              payload: { topic, provider: config.provider }
-            });
-            if (cancelled) return;
-            if (response.error) throw new Error(response.error);
-            questions = response.questions;
-          }
-        } else {
-          // Use background worker for cloud APIs to avoid CORS
-          const response = await chrome.runtime.sendMessage({
-            type: 'GENERATE_QUESTIONS',
-            payload: { topic, provider: config.provider }
-          });
-          if (cancelled) return;
-          if (response.error) throw new Error(response.error);
-          questions = response.questions;
-        }
+        // Generate first question adaptively
+        const result = await generateNextQuestion(topic, [], [], config, 3, 5);
 
         if (cancelled) return;
-        setQuestions(questions);
-        setStage('interview');
+
+        if (result.done) {
+          // Unlikely but possible - topic is so clear no questions needed
+          setStage('compiling');
+          // Compile with zero questions
+          const megaPromptText = await compileMegaPrompt(topic, [], [], config);
+          if (cancelled) return;
+          setMegaPrompt(megaPromptText);
+          setStage('result');
+        } else {
+          setQuestions([result.question!]);
+          setCurrentIndex(0);
+          setStage('interview');
+        }
       } catch (e: any) {
         if (!cancelled) {
-          setErrorMsg(e.message ?? 'Failed to generate questions. Please try again.');
+          setErrorMsg(e.message ?? 'Failed to generate first question. Please try again.');
           setStage('error');
         }
       }
@@ -156,59 +146,52 @@ export function InterviewOverlay({
 
   const handleNext = useCallback(async () => {
     if (currentIndex < questions.length - 1) {
+      // Still have questions in the queue - just advance
       setCurrentIndex((i) => i + 1);
       return;
     }
-    // Last question — compile mega-prompt
-    setStage('compiling');
+
+    // At last question - need to generate next OR compile
+    setIsGeneratingNext(true);
+    setGenerateError('');
+
     try {
       const config = await loadAIConfig();
+      const result = await generateNextQuestion(
+        topic,
+        questions,
+        answers,
+        config,
+        3,
+        5
+      );
 
-      // Compile mega-prompt: use local AI directly, or background worker for cloud APIs
-      let megaPromptText: string;
-      if (config.provider === 'local') {
-        try {
-          // Call local AI directly from content script context (window.ai available here)
-          megaPromptText = await compileMegaPrompt(topic, questions, answers, config);
-        } catch (localError: any) {
-          // Local AI failed - auto-fallback to cloud providers
-          const storageResult = typeof chrome !== 'undefined'
-            ? await chrome.storage.local.get(['apiKeys'])
-            : { apiKeys: {} };
-          const keys = (storageResult.apiKeys ?? {}) as Record<string, string>;
+      if (result.done) {
+        // Interview complete - compile mega-prompt
+        setIsGeneratingNext(false);
+        setStage('compiling');
 
-          if (keys['gemini']) { config.provider = 'gemini'; config.apiKey = keys['gemini']; }
-          else if (keys['openai']) { config.provider = 'openai'; config.apiKey = keys['openai']; }
-          else if (keys['anthropic']) { config.provider = 'anthropic'; config.apiKey = keys['anthropic']; }
-          else {
-            throw new Error('Local AI is not available. Please add a cloud API key in Settings (Gemini is free!)');
-          }
-
-          // Retry with cloud provider
-          const response = await chrome.runtime.sendMessage({
-            type: 'GENERATE_MEGA_PROMPT',
-            payload: { topic, answers, questions, provider: config.provider }
-          });
-          if (response.error) throw new Error(response.error);
-          megaPromptText = response.megaPrompt;
-        }
+        const megaPromptText = await compileMegaPrompt(topic, questions, answers, config);
+        setMegaPrompt(megaPromptText);
+        setStage('result');
       } else {
-        // Use background worker for cloud APIs to avoid CORS
-        const response = await chrome.runtime.sendMessage({
-          type: 'GENERATE_MEGA_PROMPT',
-          payload: { topic, answers, questions, provider: config.provider }
-        });
-        if (response.error) throw new Error(response.error);
-        megaPromptText = response.megaPrompt;
+        // Append new question and advance
+        setQuestions((prev) => [...prev, result.question!]);
+        setCurrentIndex((i) => i + 1);
+        setRetryCount(0);
+        setIsGeneratingNext(false);
       }
-
-      setMegaPrompt(megaPromptText);
-      setStage('result');
     } catch (e: any) {
-      setErrorMsg(e.message ?? 'Failed to compile prompt. Please try again.');
-      setStage('error');
+      setGenerateError(e.message ?? 'Failed to generate next question');
+      setRetryCount((rc) => rc + 1);
+      setIsGeneratingNext(false);
+
+      if (retryCount >= 1) {
+        // Failed twice - offer to continue with what we have
+        setCanContinueWithPartial(true);
+      }
     }
-  }, [currentIndex, questions, answers, topic]);
+  }, [currentIndex, questions, answers, topic, retryCount]);
 
   const handleBack = useCallback(() => {
     setCurrentIndex((i) => Math.max(0, i - 1));
@@ -218,127 +201,186 @@ export function InterviewOverlay({
     handleNext();
   }, [handleNext]);
 
-  // Styles
-  const overlayBg = isDark ? 'bg-gray-900 text-gray-100' : 'bg-white text-gray-900';
-  const mutedText = isDark ? 'text-gray-400' : 'text-gray-500';
+  const handleContinueWithPartial = useCallback(async () => {
+    setIsGeneratingNext(false);
+    setGenerateError('');
+    setCanContinueWithPartial(false);
+    setStage('compiling');
+
+    try {
+      const config = await loadAIConfig();
+      const megaPromptText = await compileMegaPrompt(topic, questions, answers, config);
+      setMegaPrompt(megaPromptText);
+      setStage('result');
+    } catch (e: any) {
+      setErrorMsg(e.message ?? 'Failed to compile prompt. Please try again.');
+      setStage('error');
+    }
+  }, [topic, questions, answers]);
 
   return (
-    /* Backdrop — position:absolute fills the full-viewport shadow host.
-       Using absolute (not fixed) avoids edge-cases with position:fixed inside Shadow DOM.
-       The host itself is position:fixed covering 100% of the viewport. */
+    /* Clean backdrop */
     <div
-      style={{
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        width: '100%',
-        height: '100%',
-        zIndex: 1,
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backdropFilter: 'blur(4px)',
-        backgroundColor: 'rgba(0,0,0,0.5)',
-        pointerEvents: 'auto',
-      }}
+      className="absolute inset-0 flex items-center justify-center animate-in fade-in duration-300 bg-black/50"
+      style={{ pointerEvents: 'auto' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      {/* Card */}
+      {/* Main card */}
       <div
-        className={cn(
-          'relative rounded-2xl shadow-2xl flex flex-col overflow-hidden',
-          'animate-in slide-in-from-bottom-4 fade-in duration-200',
-          overlayBg
-        )}
-        style={{ width: 480, maxHeight: 500, minHeight: 380 }}
+        className="w-[520px] max-h-[600px] overflow-hidden animate-in zoom-in slide-in-from-bottom-4 duration-500"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header close button (visible when not inside QuestionCard/ResultScreen) */}
-        {(stage === 'loading' || stage === 'compiling' || stage === 'error') && (
-          <button
-            onClick={onClose}
-            className={cn(
-              'absolute top-3 right-4 w-7 h-7 rounded-full flex items-center justify-center text-lg transition-colors z-10',
-              isDark ? 'hover:bg-red-600 text-gray-400' : 'hover:bg-red-500 hover:text-white text-gray-400'
-            )}
-          >
-            ×
-          </button>
-        )}
+        <div className="h-full flex flex-col relative card-clean">
+          {/* Header close button (visible when not inside QuestionCard/ResultScreen) */}
+          {(stage === 'loading' || stage === 'compiling' || stage === 'error') && (
+            <button
+              onClick={onClose}
+              className="absolute top-4 right-4 w-8 h-8 rounded-full flex items-center justify-center text-xl transition-all duration-300 hover:bg-red-500 hover:text-white text-gray-400 hover:scale-110 z-20"
+            >
+              ×
+            </button>
+          )}
 
-        {/* ── Loading ── */}
-        {stage === 'loading' && (
-          <div className="flex-1 flex flex-col items-center justify-center gap-4 p-10">
-            <div className="w-10 h-10 rounded-full border-4 border-blue-500 border-t-transparent animate-spin" />
-            <p className={cn('text-sm', mutedText)}>Analyzing your topic...</p>
-          </div>
-        )}
+          {/* ── Loading with Skeleton ── */}
+          {stage === 'loading' && (
+            <PageTransition direction="down">
+              <QuestionSkeleton isDark={isDark} />
+            </PageTransition>
+          )}
 
-        {/* ── Interview ── */}
-        {stage === 'interview' && questions[currentIndex] && (
-          <QuestionCard
-            question={questions[currentIndex]}
-            currentIndex={currentIndex}
-            total={questions.length}
-            existingAnswer={answers.find((a) => a.questionId === questions[currentIndex].id)}
-            onAnswer={handleAnswer}
-            onNext={handleNext}
-            onBack={handleBack}
-            onSkip={handleSkip}
-            isDark={isDark}
-          />
-        )}
+          {/* ── Interview with Page Transitions ── */}
+          {stage === 'interview' && questions[currentIndex] && (
+            <>
+              <PageTransition key={currentIndex} direction="right">
+                <QuestionCard
+                  question={questions[currentIndex]}
+                  currentIndex={currentIndex}
+                  total={questions.length}
+                  existingAnswer={answers.find((a) => a.questionId === questions[currentIndex].id)}
+                  onAnswer={handleAnswer}
+                  onNext={handleNext}
+                  onBack={handleBack}
+                  onSkip={handleSkip}
+                  isDark={isDark}
+                />
+              </PageTransition>
 
-        {/* ── Compiling ── */}
-        {stage === 'compiling' && (
-          <div className="flex-1 flex flex-col items-center justify-center gap-4 p-10">
-            <div className="w-10 h-10 rounded-full border-4 border-green-500 border-t-transparent animate-spin" />
-            <p className={cn('text-sm', mutedText)}>Building your Mega-Prompt...</p>
-          </div>
-        )}
+              {/* Loading Next Question */}
+              {isGeneratingNext && (
+                <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20">
+                  <div className="p-6 flex flex-col items-center gap-3 card-clean">
+                    <div className="w-12 h-12 border-4 border-gray-200 dark:border-gray-700 border-t-blue-500 rounded-full animate-spin" />
+                    <p className="text-sm font-medium text-gray-900 dark:text-gray-100">
+                      Thinking of next question...
+                    </p>
+                  </div>
+                </div>
+              )}
 
-        {/* ── Result ── */}
-        {stage === 'result' && (
-          <ResultScreen
-            megaPrompt={megaPrompt}
-            originalTopic={topic}
-            isDark={isDark}
-            onReplace={() => { onReplaceText(megaPrompt); onClose(); }}
-            onAppend={() => { onAppendText(megaPrompt); onClose(); }}
-            onCopy={() => {}}
-            onStartOver={() => { setStage('loading'); setAnswers([]); setCurrentIndex(0); }}
-            onClose={onClose}
-          />
-        )}
+              {/* Error Recovery */}
+              {generateError && !isGeneratingNext && (
+                <div className="absolute inset-0 bg-black/50 flex items-center justify-center z-20">
+                  <div className="p-6 max-w-sm text-center card-clean">
+                    {/* Error message with background */}
+                    <div className="bg-red-50 dark:bg-red-900/20 border-2 border-red-200 dark:border-red-700 rounded-lg p-4 shadow-sm mb-4">
+                      <p className="text-sm font-medium text-red-600 dark:text-red-400">{generateError}</p>
+                    </div>
+                    <div className="flex gap-2 justify-center">
+                      <button
+                        onClick={() => {
+                          setGenerateError('');
+                          handleNext();
+                        }}
+                        className="btn-primary"
+                      >
+                        Retry
+                      </button>
+                      {canContinueWithPartial && (
+                        <button
+                          onClick={handleContinueWithPartial}
+                          className="px-4 py-2 rounded-lg bg-green-500 hover:bg-green-600 text-white text-sm font-medium transition-all duration-200 shadow-sm hover:shadow-md"
+                        >
+                          Continue with Current Answers
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
 
-        {/* ── Error ── */}
-        {stage === 'error' && (
-          <div className="flex-1 flex flex-col items-center justify-center gap-5 p-10 text-center">
-            <div className="text-4xl">⚠️</div>
-            <p className="text-sm font-medium">{errorMsg}</p>
-            <div className="flex gap-3">
-              <button
-                onClick={() => { setAnswers([]); setCurrentIndex(0); setRunKey((k) => k + 1); setStage('loading'); }}
-                className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium transition-colors"
-              >
-                Retry
-              </button>
-              <button
-                onClick={onClose}
-                className={cn('px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-                  isDark ? 'bg-gray-700 hover:bg-gray-600 text-gray-200' : 'bg-gray-100 hover:bg-gray-200 text-gray-700'
+          {/* ── Compiling with Clean Spinner ── */}
+          {stage === 'compiling' && (
+            <PageTransition direction="up">
+              <div className="flex-1 flex flex-col items-center justify-center gap-6 p-12">
+                <div className="w-16 h-16 border-4 border-gray-200 dark:border-gray-700 border-t-blue-500 rounded-full animate-spin" />
+                {/* Status text with background card */}
+                <div className="bg-blue-50 dark:bg-blue-900/20 border-2 border-blue-200 dark:border-blue-700 rounded-lg p-6 shadow-sm text-center max-w-md">
+                  <p className="text-lg font-medium text-gray-900 dark:text-gray-100">
+                    Crafting your mega-prompt...
+                  </p>
+                  <div className="text-sm text-gray-500 dark:text-gray-400 mt-2">
+                    This usually takes 3-5 seconds
+                  </div>
+                </div>
+              </div>
+            </PageTransition>
+          )}
+
+          {/* ── Result with Success Checkmark ── */}
+          {stage === 'result' && (
+            <PageTransition direction="up">
+              {/* Success checkmark */}
+              <div className="absolute top-4 right-4 w-12 h-12 z-20">
+                <div className="w-full h-full rounded-full bg-green-500 flex items-center justify-center text-white text-2xl animate-in zoom-in duration-500 shadow-md">
+                  ✓
+                </div>
+              </div>
+              <ResultScreen
+                megaPrompt={megaPrompt}
+                originalTopic={topic}
+                isDark={isDark}
+                onReplace={() => { onReplaceText(megaPrompt); onClose(); }}
+                onAppend={() => { onAppendText(megaPrompt); onClose(); }}
+                onCopy={() => {}}
+                onStartOver={() => { setStage('loading'); setAnswers([]); setCurrentIndex(0); }}
+                onClose={onClose}
+              />
+            </PageTransition>
+          )}
+
+          {/* ── Error State ── */}
+          {stage === 'error' && (
+            <PageTransition direction="down">
+              <div className="flex-1 flex flex-col items-center justify-center gap-5 p-10 text-center">
+                {/* Error message with background card */}
+                <div className="bg-red-50 dark:bg-red-900/20 border-2 border-red-200 dark:border-red-700 rounded-lg p-6 shadow-sm max-w-md">
+                  <p className="text-lg font-semibold text-red-600 dark:text-red-400">{errorMsg}</p>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => { setAnswers([]); setCurrentIndex(0); setRunKey((k) => k + 1); setStage('loading'); }}
+                    className="btn-primary"
+                  >
+                    Retry
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="btn-secondary"
+                  >
+                    Close
+                  </button>
+                </div>
+                {errorMsg.includes('API key') && (
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Open the extension popup → Settings to add your API key.
+                  </p>
                 )}
-              >
-                Close
-              </button>
-            </div>
-            {errorMsg.includes('API key') && (
-              <p className={cn('text-xs', mutedText)}>
-                Open the extension popup → Settings to add your API key.
-              </p>
-            )}
-          </div>
-        )}
+              </div>
+            </PageTransition>
+          )}
+        </div>
       </div>
     </div>
   );

@@ -116,6 +116,37 @@ export function guessDeliverable(topic: string): DeliverableType {
 /**
  * Get few-shot example for a task family
  */
+/**
+ * Detect if the topic is self-describing (deliverable type is already clear)
+ * Examples: "tell me a story", "write a poem", "create a marketing email"
+ */
+export function isDeliverableObvious(topic: string): boolean {
+  const normalized = topic.toLowerCase();
+
+  const obviousPatterns = [
+    // Creative writing
+    /\b(story|stories|tale|narrative|fiction)\b/,
+    /\b(poem|poetry|verse|haiku|sonnet)\b/,
+    /\b(song|lyrics|ballad)\b/,
+    /\b(joke|jokes|pun|riddle)\b/,
+
+    // Business documents (already explicit)
+    /\b(email|message|letter)\s+(to|for|about)/,
+    /\b(report|document|memo|proposal)\s+(on|about|for)/,
+    /\b(blog\s+post|article|essay)\s+(about|on)/,
+    /\b(presentation|deck|slides)\s+(for|about)/,
+
+    // Code (already explicit)
+    /\b(function|class|component|script|code)\s+(to|for|that)/,
+    /\b(app|application|website|tool)\s+(to|for|that)/,
+
+    // Plans/strategies (already explicit)
+    /\b(plan|roadmap|strategy|outline)\s+(for|to)/,
+  ];
+
+  return obviousPatterns.some(pattern => pattern.test(normalized));
+}
+
 export function getFewShotExample(family: TaskFamily): string {
   switch (family) {
     case 'writing':

@@ -30,14 +30,17 @@ export function RefineButton({ onClick, isDark, hasText }: RefineButtonProps) {
   }, [hovered]);
 
   return (
-    <div className="relative inline-flex items-center">
-      {/* Tooltip */}
+    <div className="relative inline-flex items-center group">
+      {/* Clean tooltip */}
       {showTooltip && (
         <div
           className={cn(
-            'absolute bottom-full mb-2 left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap shadow-lg pointer-events-none',
-            'animate-in fade-in slide-in-from-bottom-1 duration-150',
-            isDark ? 'bg-gray-100 text-gray-900' : 'bg-gray-900 text-white'
+            'absolute bottom-full mb-3 left-1/2 -translate-x-1/2 px-4 py-2 rounded-lg text-xs font-medium whitespace-nowrap pointer-events-none',
+            'border shadow-md',
+            'animate-in fade-in slide-in-from-bottom-2 duration-200',
+            isDark
+              ? 'bg-white text-gray-900 border-gray-200'
+              : 'bg-gray-900 text-white border-gray-700'
           )}
         >
           Refine this prompt
@@ -45,37 +48,37 @@ export function RefineButton({ onClick, isDark, hasText }: RefineButtonProps) {
           <span
             className={cn(
               'absolute top-full left-1/2 -translate-x-1/2 border-4 border-transparent',
-              isDark ? 'border-t-gray-100' : 'border-t-gray-900'
+              isDark ? 'border-t-white' : 'border-t-gray-900'
             )}
           />
         </div>
       )}
 
-      {/* Button */}
+      {/* Clean button */}
       <button
         onClick={onClick}
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{
           opacity: visible ? (hasText ? 1 : 0.6) : 0,
-          transform: hovered ? 'scale(1.08)' : 'scale(1)',
-          transition: 'opacity 0.3s ease, transform 0.15s ease',
+          transform: hovered ? 'scale(1.05)' : 'scale(1)',
+          transition: 'opacity 0.3s ease, transform 0.2s ease',
         }}
         className={cn(
-          'w-8 h-8 rounded-full flex items-center justify-center shadow-lg cursor-pointer',
-          'focus:outline-none focus:ring-2 focus:ring-offset-1',
-          isDark
-            ? 'bg-blue-600 hover:bg-blue-500 text-white focus:ring-blue-400'
-            : 'bg-blue-600 hover:bg-blue-700 text-white focus:ring-blue-500'
+          'relative w-10 h-10 rounded-full flex items-center justify-center cursor-pointer',
+          'bg-blue-500 hover:bg-blue-600',
+          'shadow-md hover:shadow-lg',
+          'transition-all duration-200',
+          'focus:outline-none focus:ring-2 focus:ring-blue-400 focus:ring-offset-2'
         )}
         aria-label="Refine this prompt with Prompt Architect"
         title="Refine this prompt"
       >
-        {/* Sparkle / magic wand icon (inline SVG — no external deps needed) */}
+        {/* Magic wand icon */}
         <svg
           viewBox="0 0 20 20"
           fill="currentColor"
-          className="w-4 h-4"
+          className="w-5 h-5 text-white"
           aria-hidden="true"
         >
           <path
