@@ -622,51 +622,54 @@ export async function checkLocalAICapability(): Promise<boolean> {
 // ════════════════════════════════════════════════════════════════════════════
 
 /**
- * Helper: Get OpenAI API key with fallback
- * Priority: config.apiKey → chrome.storage → throw error
+ * Helper: Get API key for current provider
+ * Used by V3 functions to support any provider (Gemini, OpenAI, Claude, Grok)
  */
-async function getOpenAIKey(config: AIEngineConfig): Promise<string> {
-  if (config.provider === 'openai' && config.apiKey) {
-    return config.apiKey;
+async function getProviderKey(config: AIEngineConfig): Promise<{ provider: AIProvider; apiKey: string }> {
+  // If config already has provider and key, use it
+  if (config.apiKey && config.provider !== 'local') {
+    return { provider: config.provider, apiKey: config.apiKey };
   }
 
+  // Otherwise, get from storage
   if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
     throw new Error('Chrome storage not available');
   }
 
-  const result = await chrome.storage.local.get(['apiKeys']);
+  const result = await chrome.storage.local.get(['apiKeys', 'aiProvider']);
   const keys = (result.apiKeys ?? {}) as Record<string, string>;
+  const savedProvider = result.aiProvider as AIProvider | undefined;
 
-  if (keys.openai) return keys.openai;
+  // Priority: saved provider → first available key (Gemini → OpenAI → Anthropic → Grok)
+  let provider: AIProvider;
+  let apiKey: string;
 
-  throw new Error('OpenAI API key not found. Please add it in Settings.');
-}
-
-/**
- * Helper: Get Anthropic API key with fallback
- * Priority: config.apiKey → chrome.storage → throw error
- */
-async function getAnthropicKey(config: AIEngineConfig): Promise<string> {
-  if (config.provider === 'anthropic' && config.apiKey) {
-    return config.apiKey;
+  if (savedProvider && savedProvider !== 'local' && keys[savedProvider]) {
+    provider = savedProvider;
+    apiKey = keys[savedProvider];
+  } else if (keys.gemini) {
+    provider = 'gemini';
+    apiKey = keys.gemini;
+  } else if (keys.openai) {
+    provider = 'openai';
+    apiKey = keys.openai;
+  } else if (keys.anthropic) {
+    provider = 'anthropic';
+    apiKey = keys.anthropic;
+  } else if (keys.grok) {
+    provider = 'grok';
+    apiKey = keys.grok;
+  } else {
+    throw new Error('No API key found. Please add one in Settings.');
   }
 
-  if (typeof chrome === 'undefined' || !chrome.storage || !chrome.storage.local) {
-    throw new Error('Chrome storage not available');
-  }
-
-  const result = await chrome.storage.local.get(['apiKeys']);
-  const keys = (result.apiKeys ?? {}) as Record<string, string>;
-
-  if (keys.anthropic) return keys.anthropic;
-
-  throw new Error('Anthropic API key not found. Please add it in Settings.');
+  return { provider, apiKey };
 }
 
 /**
  * V3 Stage 1: Universal Context Extractor
- * Uses gpt-4o-mini with OpenAI Structured Outputs (no repair loops)
- * Returns exactly 3-4 questions, all at once
+ * Generates exactly 3-4 questions at once (using whatever provider user has)
+ * Supports: OpenAI, Anthropic, Gemini, Grok
  */
 export async function generateContextQuestions(
   topic: string,
@@ -677,50 +680,138 @@ export async function generateContextQuestions(
 }> {
   console.log('[V3 Stage 1] Generating context questions...');
 
-  // 1. Get OpenAI API key
-  const apiKey = await getOpenAIKey(config);
+  // 1. Get provider and API key
+  const { provider, apiKey } = await getProviderKey(config);
+  console.log('[V3 Stage 1] Using provider:', provider);
 
   // 2. Build prompts
   const systemPrompt = getV3Stage1SystemPrompt();
   const userPrompt = getV3Stage1UserPrompt(topic);
-  const schema = getV3Stage1JsonSchema();
 
-  // 3. Call OpenAI with Structured Outputs
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${apiKey}`,
-    },
-    body: JSON.stringify({
-      model: 'gpt-4o-mini',
-      temperature: 0.2,
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      response_format: {
-        type: 'json_schema',
-        json_schema: {
-          name: 'context_questions',
-          strict: true,
-          schema: schema,
-        },
+  // 3. Call API based on provider
+  let rawResponse: string;
+
+  if (provider === 'openai') {
+    // OpenAI with Structured Outputs (guaranteed valid JSON)
+    const schema = getV3Stage1JsonSchema();
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
       },
-    }),
-  });
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        response_format: {
+          type: 'json_schema',
+          json_schema: {
+            name: 'context_questions',
+            strict: true,
+            schema: schema,
+          },
+        },
+      }),
+    });
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(`OpenAI error: ${err?.error?.message ?? response.statusText}`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(`OpenAI error: ${err?.error?.message ?? response.statusText}`);
+    }
+
+    const data = await response.json();
+    rawResponse = data.choices[0].message.content;
+  } else if (provider === 'anthropic') {
+    // Anthropic Claude
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 2000,
+        temperature: 0.2,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(`Anthropic error: ${err?.error?.message ?? response.statusText}`);
+    }
+
+    const data = await response.json();
+    rawResponse = data.content[0].text;
+  } else if (provider === 'gemini') {
+    // Google Gemini
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+          generationConfig: { temperature: 0.2 },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(`Gemini error: ${err?.error?.message ?? response.statusText}`);
+    }
+
+    const data = await response.json();
+    rawResponse = data.candidates[0].content.parts[0].text;
+  } else if (provider === 'grok') {
+    // xAI Grok
+    const response = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'grok-beta',
+        temperature: 0.2,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(`Grok error: ${err?.error?.message ?? response.statusText}`);
+    }
+
+    const data = await response.json();
+    rawResponse = data.choices[0].message.content;
+  } else {
+    throw new Error(`Unsupported provider: ${provider}`);
   }
 
-  const data = await response.json();
-  const result = JSON.parse(data.choices[0].message.content);
+  // 4. Parse JSON response
+  const parsed = extractFirstJsonObject(rawResponse);
+  if (!parsed) {
+    throw new Error('Failed to parse JSON response from AI');
+  }
+
+  const result = parsed as any as { genre: string; questions: any[] };
 
   console.log('[V3 Stage 1] Response:', result);
 
-  // 4. Validate (basic sanity checks only - structured outputs guarantee valid JSON)
+  // 5. Validate
   if (!result.genre || typeof result.genre !== 'string') {
     throw new Error('Invalid response: missing or invalid genre');
   }
@@ -733,7 +824,7 @@ export async function generateContextQuestions(
     throw new Error(`Invalid response: expected 3-4 questions, got ${result.questions.length}`);
   }
 
-  // 5. Normalize to Question[] format
+  // 6. Normalize to Question[] format
   const questions: Question[] = result.questions.map((q: any, index: number) => ({
     id: q.id || `q${index + 1}`,
     question: q.question,
@@ -753,7 +844,8 @@ export async function generateContextQuestions(
 
 /**
  * V3 Stage 2: Dynamic Mega-Prompt Compiler
- * Uses claude-3.5-sonnet (max_tokens: 2000)
+ * Compiles Q&A into mega-prompt (using whatever provider user has)
+ * Supports: OpenAI, Anthropic, Gemini, Grok
  */
 export async function compileMegaPromptV3(
   topic: string,
@@ -763,37 +855,119 @@ export async function compileMegaPromptV3(
 ): Promise<string> {
   console.log('[V3 Stage 2] Compiling mega-prompt...');
 
-  // 1. Get Anthropic API key
-  const apiKey = await getAnthropicKey(config);
+  // 1. Get provider and API key
+  const { provider, apiKey } = await getProviderKey(config);
+  console.log('[V3 Stage 2] Using provider:', provider);
 
   // 2. Build prompts
   const systemPrompt = getV3Stage2SystemPrompt();
   const userPrompt = getV3Stage2UserPrompt(topic, answers, questions);
 
-  // 3. Call Anthropic
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true',
-    },
-    body: JSON.stringify({
-      model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 2000,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userPrompt }],
-    }),
-  });
+  // 3. Call API based on provider
+  let megaPrompt: string;
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(`Anthropic error: ${err?.error?.message ?? response.statusText}`);
+  if (provider === 'openai') {
+    // OpenAI
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        max_tokens: 2000,
+        temperature: 0.3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(`OpenAI error: ${err?.error?.message ?? response.statusText}`);
+    }
+
+    const data = await response.json();
+    megaPrompt = data.choices[0].message.content;
+  } else if (provider === 'anthropic') {
+    // Anthropic Claude
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
+      body: JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
+        max_tokens: 2000,
+        temperature: 0.3,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userPrompt }],
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(`Anthropic error: ${err?.error?.message ?? response.statusText}`);
+    }
+
+    const data = await response.json();
+    megaPrompt = data.content[0].text;
+  } else if (provider === 'gemini') {
+    // Google Gemini
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }],
+          generationConfig: { temperature: 0.3, maxOutputTokens: 2000 },
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(`Gemini error: ${err?.error?.message ?? response.statusText}`);
+    }
+
+    const data = await response.json();
+    megaPrompt = data.candidates[0].content.parts[0].text;
+  } else if (provider === 'grok') {
+    // xAI Grok
+    const response = await fetch('https://api.x.ai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'grok-beta',
+        max_tokens: 2000,
+        temperature: 0.3,
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(`Grok error: ${err?.error?.message ?? response.statusText}`);
+    }
+
+    const data = await response.json();
+    megaPrompt = data.choices[0].message.content;
+  } else {
+    throw new Error(`Unsupported provider: ${provider}`);
   }
-
-  const data = await response.json();
-  const megaPrompt = data.content[0].text;
 
   // 4. Basic validation (no repair loop)
   if (!megaPrompt || megaPrompt.trim().length < 100) {

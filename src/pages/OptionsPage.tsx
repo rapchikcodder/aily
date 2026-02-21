@@ -368,7 +368,7 @@ function OptionsPage() {
                   Use V3 Architecture (Recommended)
                 </div>
                 <p className="text-sm text-gray-600 dark:text-gray-400 mt-1">
-                  2 API calls, tabbed UI, gpt-4o-mini + claude-3.5-sonnet
+                  2 API calls, tabbed UI, works with any provider (Gemini, OpenAI, Claude, Grok)
                 </p>
                 <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
                   <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded px-2 py-1 text-green-700 dark:text-green-300">
@@ -378,7 +378,7 @@ function OptionsPage() {
                     ✓ ~50% faster
                   </div>
                   <div className="bg-green-50 dark:bg-green-900/20 border border-green-200 dark:border-green-700 rounded px-2 py-1 text-green-700 dark:text-green-300">
-                    ✓ Zero repair loops
+                    ✓ All questions at once
                   </div>
                 </div>
               </div>
@@ -387,12 +387,7 @@ function OptionsPage() {
             {v3Enabled && (
               <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-700 rounded-lg p-4">
                 <p className="text-sm text-blue-800 dark:text-blue-200">
-                  <strong>ⓘ V3 Requirements:</strong> Requires both OpenAI and Anthropic API keys
-                  {(!apiKeys.openai || !apiKeys.anthropic) && (
-                    <span className="block mt-1 text-amber-700 dark:text-amber-300">
-                      ⚠️ {!apiKeys.openai && 'OpenAI key missing'}{!apiKeys.openai && !apiKeys.anthropic && ' and '}{!apiKeys.anthropic && 'Anthropic key missing'}
-                    </span>
-                  )}
+                  <strong>ⓘ V3 Mode:</strong> Uses your selected AI provider for both question generation and mega-prompt compilation
                 </p>
               </div>
             )}
