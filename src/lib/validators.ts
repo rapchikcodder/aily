@@ -9,12 +9,56 @@ import type { Question, QuestionDimension } from '../stores/useAppStore';
 
 /**
  * Extract the first JSON object from text
- * Handles markdown fences, extra text, etc.
+ * Handles markdown fences, extra text, nested structures, etc.
  */
 export function extractFirstJsonObject(text: string): string | null {
-  // Try to find first {...} region
-  const match = text.match(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/);
-  return match ? match[0] : null;
+  // Remove markdown code fences if present
+  text = text.replace(/```json\s*/g, '').replace(/```\s*/g, '');
+
+  // Find the first opening brace
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+
+  // Count braces to find the matching closing brace
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+
+  for (let i = start; i < text.length; i++) {
+    const char = text[i];
+
+    // Handle string escaping
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+
+    if (char === '\\') {
+      escaping = true;
+      continue;
+    }
+
+    // Track if we're inside a string
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    // Only count braces outside of strings
+    if (!inString) {
+      if (char === '{') {
+        depth++;
+      } else if (char === '}') {
+        depth--;
+        if (depth === 0) {
+          // Found the matching closing brace
+          return text.substring(start, i + 1);
+        }
+      }
+    }
+  }
+
+  return null;
 }
 
 /**
