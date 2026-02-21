@@ -752,9 +752,9 @@ export async function generateContextQuestions(
     const data = await response.json();
     rawResponse = data.content[0].text;
   } else if (provider === 'gemini') {
-    // Google Gemini (using v1 API with stable model name)
+    // Google Gemini 2.5 Flash (using v1beta API - required for generateContent)
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -919,9 +919,9 @@ export async function compileMegaPromptV3(
     const data = await response.json();
     megaPrompt = data.content[0].text;
   } else if (provider === 'gemini') {
-    // Google Gemini (using v1 API with stable model name)
+    // Google Gemini 2.5 Pro (using v1beta API - required for generateContent)
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1/models/gemini-1.5-pro:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
